@@ -58,7 +58,7 @@ This milestone is complete only when all are true:
 - [x] **S02: Docker Sandbox + Tool Execution** `risk:high` `depends:[S01]`
   > After this: Docker container spawns from custom Kali base image, executes nmap inside it, returns structured parsed output, and tears down cleanly — proven by integration test against a real Docker daemon
 
-- [ ] **S03: ReAct Agent Loop** `risk:high` `depends:[S01,S02]`
+- [x] **S03: ReAct Agent Loop** `risk:high` `depends:[S01,S02]`
   > After this: Agent autonomously reasons through at least Recon and Scanning phases, selects tools, executes them in the sandbox, parses results, accumulates state, and transitions between phases — proven by integration test with real LLM and Docker
 
 - [ ] **S04: Tool Suite Integration** `risk:medium` `depends:[S02,S03]`

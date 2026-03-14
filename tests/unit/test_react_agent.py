@@ -1,0 +1,451 @@
+"""Unit tests for ReactAgent with mocked LLMClient and DockerSandbox."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from oxpwn.agent.events import (
+    AgentEvent,
+    ErrorEvent,
+    PhaseTransitionEvent,
+    ReasoningEvent,
+    ToolCallEvent,
+    ToolResultEvent,
+)
+from oxpwn.agent.exceptions import AgentMaxIterationsError
+from oxpwn.agent.react import ReactAgent
+from oxpwn.agent.tools import ToolRegistry
+from oxpwn.core.models import LLMResponse, Phase, ScanState, TokenUsage, ToolResult
+
+
+# ---------------------------------------------------------------------------
+# Test helpers
+# ---------------------------------------------------------------------------
+
+
+def _token_usage() -> TokenUsage:
+    return TokenUsage(input=100, output=50, total=150)
+
+
+def _llm_response(
+    content: str = "",
+    tool_calls: list[dict[str, Any]] | None = None,
+) -> LLMResponse:
+    """Build a minimal LLMResponse for testing."""
+    return LLMResponse(
+        content=content,
+        model="test-model",
+        tokens_used=_token_usage(),
+        cost=0.001,
+        latency_ms=200,
+        tool_calls=tool_calls,
+    )
+
+
+def _tool_call(
+    name: str,
+    arguments: dict[str, Any],
+    call_id: str = "call_1",
+) -> dict[str, Any]:
+    """Build a tool call dict in OpenAI format."""
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": json.dumps(arguments),
+        },
+    }
+
+
+def _tool_result(**overrides) -> ToolResult:
+    defaults = {
+        "tool_name": "nmap",
+        "command": "nmap -sV 10.0.0.1",
+        "stdout": "PORT 80/tcp open http",
+        "stderr": "",
+        "exit_code": 0,
+        "duration_ms": 500,
+        "parsed_output": {"hosts": [{"address": "10.0.0.1", "ports": [{"port_id": 80}]}]},
+    }
+    defaults.update(overrides)
+    return ToolResult(**defaults)
+
+
+def _make_scan_state(target: str = "10.0.0.1") -> ScanState:
+    return ScanState(target=target, current_phase=Phase.recon)
+
+
+def _make_registry() -> ToolRegistry:
+    """Registry with a mock nmap tool."""
+    registry = ToolRegistry()
+
+    class MockNmapExecutor:
+        def __init__(self, sandbox):
+            self.sandbox = sandbox
+
+        async def run(self, target: str, ports: str | None = None, flags: str = "-sV") -> ToolResult:
+            return _tool_result(command=f"nmap {flags} {target}")
+
+    registry.register(
+        name="nmap",
+        description="Run nmap scan.",
+        parameters_schema={
+            "type": "object",
+            "properties": {"target": {"type": "string"}},
+            "required": ["target"],
+        },
+        executor_factory=lambda s: MockNmapExecutor(s),
+    )
+    return registry
+
+
+class EventCollector:
+    """Collects events for assertion."""
+
+    def __init__(self):
+        self.events: list[AgentEvent] = []
+
+    async def on_event(self, event: AgentEvent) -> None:
+        self.events.append(event)
+
+    def of_type(self, cls: type) -> list:
+        return [e for e in self.events if isinstance(e, cls)]
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+class TestReactAgentToolDispatch:
+    """Agent calls LLM, dispatches tool, feeds result back."""
+
+    @pytest.mark.asyncio
+    async def test_tool_call_then_phase_complete(self):
+        """Iteration 1: tool call → dispatch → result. Iteration 2: no tool call → phase done."""
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            # Recon iter 1: call nmap
+            _llm_response(
+                content="Let me scan the target.",
+                tool_calls=[_tool_call("nmap", {"target": "10.0.0.1"})],
+            ),
+            # Recon iter 2: no tool call = phase complete
+            _llm_response(content="Recon complete. Found port 80 open."),
+            # Scanning iter 1: no tool call = phase complete immediately
+            _llm_response(content="No further scanning needed."),
+        ])
+
+        sandbox = MagicMock()
+        state = _make_scan_state()
+        agent = ReactAgent(llm, sandbox, _make_registry(), max_iterations_per_phase=5)
+
+        result = await agent.run(state)
+
+        # LLM was called: 2 for recon + 1 for scanning = 3
+        assert llm.complete.call_count == 3
+
+        # Tool result was accumulated
+        assert len(result.tool_results) == 1
+        assert result.tool_results[0].tool_name == "nmap"
+
+        # Phases completed
+        assert Phase.recon in result.phases_completed
+        assert Phase.scanning in result.phases_completed
+
+    @pytest.mark.asyncio
+    async def test_tool_call_messages_have_matching_ids(self):
+        """The tool result message must carry the same tool_call_id as the assistant's tool call."""
+        llm = AsyncMock()
+        call_id = "call_abc123"
+
+        responses = [
+            _llm_response(
+                content="Scanning.",
+                tool_calls=[_tool_call("nmap", {"target": "10.0.0.1"}, call_id=call_id)],
+            ),
+            _llm_response(content="Recon done."),
+            _llm_response(content="Scanning done."),
+        ]
+        llm.complete = AsyncMock(side_effect=responses)
+
+        sandbox = MagicMock()
+        agent = ReactAgent(llm, sandbox, _make_registry(), max_iterations_per_phase=5)
+        await agent.run(_make_scan_state())
+
+        # Second call to LLM (recon iter 2) should have the tool result in messages
+        second_call_messages = llm.complete.call_args_list[1][0][0]
+
+        tool_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["tool_call_id"] == call_id
+        assert tool_msgs[0]["name"] == "nmap"
+
+
+class TestPhaseTransition:
+    """Non-tool-call response signals phase completion."""
+
+    @pytest.mark.asyncio
+    async def test_no_tool_call_triggers_transition(self):
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            # Recon: immediate phase complete
+            _llm_response(content="Nothing to scan."),
+            # Scanning: immediate phase complete
+            _llm_response(content="Done."),
+        ])
+
+        sandbox = MagicMock()
+        state = _make_scan_state()
+        agent = ReactAgent(llm, sandbox, _make_registry(), max_iterations_per_phase=5)
+
+        result = await agent.run(state)
+
+        assert Phase.recon in result.phases_completed
+        assert Phase.scanning in result.phases_completed
+        # No tool results since no tools were called
+        assert len(result.tool_results) == 0
+
+    @pytest.mark.asyncio
+    async def test_scan_state_advances_phase(self):
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            _llm_response(content="Recon done."),
+            _llm_response(content="Scanning done."),
+        ])
+
+        sandbox = MagicMock()
+        state = _make_scan_state()
+        agent = ReactAgent(llm, sandbox, _make_registry())
+
+        await agent.run(state)
+
+        # Both phases should be completed
+        assert state.phases_completed == [Phase.recon, Phase.scanning]
+
+
+class TestMaxIterations:
+    """Exceeding iteration budget raises AgentMaxIterationsError."""
+
+    @pytest.mark.asyncio
+    async def test_raises_on_budget_exhaustion(self):
+        llm = AsyncMock()
+        # Always return tool calls, never complete the phase
+        llm.complete = AsyncMock(
+            return_value=_llm_response(
+                content="Scanning more.",
+                tool_calls=[_tool_call("nmap", {"target": "10.0.0.1"})],
+            ),
+        )
+
+        sandbox = MagicMock()
+        agent = ReactAgent(llm, sandbox, _make_registry(), max_iterations_per_phase=3)
+
+        with pytest.raises(AgentMaxIterationsError) as exc_info:
+            await agent.run(_make_scan_state())
+
+        assert exc_info.value.phase == "recon"
+        assert exc_info.value.iteration == 3
+
+
+class TestMultipleToolCalls:
+    """Multiple tool calls in a single LLM response."""
+
+    @pytest.mark.asyncio
+    async def test_sequential_dispatch(self):
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            # Two tool calls in one response
+            _llm_response(
+                content="Running two scans.",
+                tool_calls=[
+                    _tool_call("nmap", {"target": "10.0.0.1"}, call_id="call_1"),
+                    _tool_call("nmap", {"target": "10.0.0.2"}, call_id="call_2"),
+                ],
+            ),
+            _llm_response(content="Recon done."),
+            _llm_response(content="Scanning done."),
+        ])
+
+        sandbox = MagicMock()
+        state = _make_scan_state()
+        agent = ReactAgent(llm, sandbox, _make_registry(), max_iterations_per_phase=5)
+
+        await agent.run(state)
+
+        # Both tool calls were dispatched
+        assert len(state.tool_results) == 2
+
+        # Both tool result messages in next LLM call
+        second_call_messages = llm.complete.call_args_list[1][0][0]
+        tool_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+        assert len(tool_msgs) == 2
+        assert {m["tool_call_id"] for m in tool_msgs} == {"call_1", "call_2"}
+
+
+class TestMalformedToolCall:
+    """Malformed tool call arguments are handled gracefully."""
+
+    @pytest.mark.asyncio
+    async def test_bad_arguments_skipped(self):
+        """Malformed args should not crash the agent — dispatch with empty dict."""
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            _llm_response(
+                content="Trying tool.",
+                tool_calls=[{
+                    "id": "call_bad",
+                    "type": "function",
+                    "function": {
+                        "name": "nmap",
+                        "arguments": "not valid json {{{",
+                    },
+                }],
+            ),
+            _llm_response(content="Recon done."),
+            _llm_response(content="Scanning done."),
+        ])
+
+        sandbox = MagicMock()
+        state = _make_scan_state()
+
+        # Mock executor that handles missing target gracefully
+        registry = ToolRegistry()
+
+        class LenientExecutor:
+            def __init__(self, sandbox):
+                pass
+
+            async def run(self, **kwargs) -> ToolResult:
+                return _tool_result(tool_name="nmap")
+
+        registry.register("nmap", "Nmap.", {"type": "object", "properties": {}}, lambda s: LenientExecutor(s))
+
+        agent = ReactAgent(llm, sandbox, registry, max_iterations_per_phase=5)
+        result = await agent.run(state)
+
+        # Agent completed without crashing
+        assert Phase.recon in result.phases_completed
+
+
+class TestEventCallbacks:
+    """Event callback receives events in proper order."""
+
+    @pytest.mark.asyncio
+    async def test_events_emitted_in_order(self):
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            _llm_response(
+                content="Running nmap.",
+                tool_calls=[_tool_call("nmap", {"target": "10.0.0.1"})],
+            ),
+            _llm_response(content="Recon complete."),
+            _llm_response(content="Scanning complete."),
+        ])
+
+        sandbox = MagicMock()
+        collector = EventCollector()
+        agent = ReactAgent(
+            llm, sandbox, _make_registry(),
+            max_iterations_per_phase=5,
+            event_callback=collector,
+        )
+        await agent.run(_make_scan_state())
+
+        # Should have: ToolCallEvent, ToolResultEvent, ReasoningEvent, PhaseTransition, ...
+        assert len(collector.of_type(ToolCallEvent)) >= 1
+        assert len(collector.of_type(ToolResultEvent)) >= 1
+        assert len(collector.of_type(PhaseTransitionEvent)) >= 1
+
+        # ToolCall comes before ToolResult
+        tc_idx = next(i for i, e in enumerate(collector.events) if isinstance(e, ToolCallEvent))
+        tr_idx = next(i for i, e in enumerate(collector.events) if isinstance(e, ToolResultEvent))
+        assert tc_idx < tr_idx
+
+    @pytest.mark.asyncio
+    async def test_no_callback_does_not_crash(self):
+        """Agent works fine without an event callback."""
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            _llm_response(content="Done."),
+            _llm_response(content="Done."),
+        ])
+
+        sandbox = MagicMock()
+        agent = ReactAgent(llm, sandbox, _make_registry(), event_callback=None)
+        result = await agent.run(_make_scan_state())
+
+        assert Phase.recon in result.phases_completed
+
+    @pytest.mark.asyncio
+    async def test_broken_callback_does_not_crash_agent(self):
+        """If the callback raises, the agent continues."""
+
+        class BrokenCallback:
+            async def on_event(self, event):
+                raise RuntimeError("callback exploded")
+
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            _llm_response(content="Done."),
+            _llm_response(content="Done."),
+        ])
+
+        sandbox = MagicMock()
+        agent = ReactAgent(llm, sandbox, _make_registry(), event_callback=BrokenCallback())
+        # Should complete without raising
+        result = await agent.run(_make_scan_state())
+        assert Phase.recon in result.phases_completed
+
+
+class TestScanStateAccumulation:
+    """ScanState accumulates tool results and records LLM usage."""
+
+    @pytest.mark.asyncio
+    async def test_llm_usage_accumulated(self):
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            _llm_response(content="Done."),
+            _llm_response(content="Done."),
+        ])
+
+        sandbox = MagicMock()
+        state = _make_scan_state()
+        agent = ReactAgent(llm, sandbox, _make_registry())
+        await agent.run(state)
+
+        # 2 LLM calls × 0.001 cost each
+        assert state.total_cost == pytest.approx(0.002)
+        # 2 LLM calls × 150 tokens each
+        assert state.total_tokens == 300
+
+    @pytest.mark.asyncio
+    async def test_parsed_output_fed_to_llm(self):
+        """Tool output sent to LLM should be JSON from parsed_output, not raw stdout."""
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            _llm_response(
+                content="Scanning.",
+                tool_calls=[_tool_call("nmap", {"target": "10.0.0.1"})],
+            ),
+            _llm_response(content="Recon done."),
+            _llm_response(content="Scanning done."),
+        ])
+
+        sandbox = MagicMock()
+        agent = ReactAgent(llm, sandbox, _make_registry(), max_iterations_per_phase=5)
+        await agent.run(_make_scan_state())
+
+        # Check the tool result message content in the second LLM call
+        second_call_messages = llm.complete.call_args_list[1][0][0]
+        tool_msg = next(m for m in second_call_messages if m.get("role") == "tool")
+
+        # Content should be JSON (parsed_output), not raw stdout
+        parsed = json.loads(tool_msg["content"])
+        assert "hosts" in parsed

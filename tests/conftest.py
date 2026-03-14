@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timezone
 
 import pytest
@@ -111,3 +112,46 @@ def docker_sandbox(tmp_path_factory):
 
     loop.run_until_complete(sandbox.destroy())
     loop.close()
+
+
+# ---------------------------------------------------------------------------
+# LLM client fixture (integration tests)
+# ---------------------------------------------------------------------------
+
+_LLM_KEY_ENV_VARS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY")
+
+
+@pytest.fixture(scope="session")
+def llm_client():
+    """Provide an :class:`LLMClient` for integration tests.
+
+    Uses ``OXPWN_TEST_MODEL`` or defaults to ``gemini/gemini-2.5-flash``.
+    Skips if no API key is found in the environment.
+    """
+    if not any(os.environ.get(k) for k in _LLM_KEY_ENV_VARS):
+        pytest.skip("No LLM API key set — skipping LLM integration tests")
+
+    from oxpwn.llm.client import LLMClient
+
+    model = os.environ.get("OXPWN_TEST_MODEL", "gemini/gemini-2.5-flash")
+    return LLMClient(model)
+
+
+# ---------------------------------------------------------------------------
+# ReactAgent fixture (integration tests — requires both LLM + Docker)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def react_agent(llm_client, docker_sandbox):
+    """Provide a :class:`ReactAgent` with real LLM + Docker sandbox.
+
+    Registers the default nmap tool.  Skips if either Docker or LLM
+    credentials are unavailable (inherited from fixture dependencies).
+    """
+    from oxpwn.agent.react import ReactAgent
+    from oxpwn.agent.tools import ToolRegistry, register_default_tools
+
+    registry = ToolRegistry()
+    register_default_tools(registry)
+    return ReactAgent(llm_client, docker_sandbox, registry, max_iterations_per_phase=5)
