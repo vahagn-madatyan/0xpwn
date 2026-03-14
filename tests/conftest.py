@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -65,3 +66,48 @@ def scan_state_factory():
         return ScanState(target=target, current_phase=current_phase, **kwargs)
 
     return _create
+
+
+# ---------------------------------------------------------------------------
+# Docker sandbox session fixture (integration tests)
+# ---------------------------------------------------------------------------
+
+_SANDBOX_IMAGE = "oxpwn-sandbox:dev"
+
+
+@pytest.fixture(scope="session")
+def docker_sandbox(tmp_path_factory):
+    """Provide a running :class:`DockerSandbox` for integration tests.
+
+    * Builds the image idempotently (skips if already present).
+    * Skips the entire test session if Docker is unreachable.
+    * Creates the container once, yields it, destroys on teardown.
+    """
+    import docker as docker_lib
+
+    try:
+        client = docker_lib.from_env()
+        client.ping()
+    except Exception:  # noqa: BLE001
+        pytest.skip("Docker daemon not reachable — skipping integration tests")
+
+    # Build image if missing
+    try:
+        client.images.get(_SANDBOX_IMAGE)
+    except docker_lib.errors.ImageNotFound:
+        import pathlib
+
+        dockerfile_dir = pathlib.Path(__file__).resolve().parent.parent / "docker"
+        client.images.build(path=str(dockerfile_dir), tag=_SANDBOX_IMAGE, rm=True)
+
+    # Create sandbox via asyncio
+    from oxpwn.sandbox.docker import DockerSandbox
+
+    sandbox = DockerSandbox(_SANDBOX_IMAGE, scan_id="integration-test")
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(sandbox.create())
+
+    yield sandbox
+
+    loop.run_until_complete(sandbox.destroy())
+    loop.close()

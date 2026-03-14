@@ -55,7 +55,7 @@ This milestone is complete only when all are true:
 - [x] **S01: Foundation + LLM Client** `risk:high` `depends:[]`
   > After this: Python package scaffolded with pyproject.toml, Pydantic state models defined, LiteLLM async client sends prompts with tool calling to any provider and returns structured responses with cost data — proven by integration test against a real LLM
 
-- [ ] **S02: Docker Sandbox + Tool Execution** `risk:high` `depends:[S01]`
+- [x] **S02: Docker Sandbox + Tool Execution** `risk:high` `depends:[S01]`
   > After this: Docker container spawns from custom Kali base image, executes nmap inside it, returns structured parsed output, and tears down cleanly — proven by integration test against a real Docker daemon
 
 - [ ] **S03: ReAct Agent Loop** `risk:high` `depends:[S01,S02]`

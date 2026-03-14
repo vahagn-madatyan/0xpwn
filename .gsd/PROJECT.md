@@ -2,7 +2,7 @@
 
 ## What This Is
 
-0xpwn — an autonomous AI pentesting agent that runs a 5-phase security assessment pipeline (Recon → Scanning → Exploitation → Validation → Reporting) inside an isolated Docker/Kali sandbox. Python 3.12+, Apache 2.0, freemium model. Currently pre-code — planning documents, brand kit, competitive research, and gap analysis exist but no implementation yet.
+0xpwn — an autonomous AI pentesting agent that runs a 5-phase security assessment pipeline (Recon → Scanning → Exploitation → Validation → Reporting) inside an isolated Docker/Kali sandbox. Python 3.12+, Apache 2.0, freemium model.
 
 ## Core Value
 
@@ -11,15 +11,18 @@ A bug bounty hunter runs `0xpwn scan --target <url>` and watches an AI agent sys
 ## Current State
 
 - S01 complete: Python package scaffolded, Pydantic models defined, async LLM client proven
-- `pip install -e .` works, `0xpwn --help` responds, 43 unit tests + 2 integration tests passing
-- LLMClient wraps LiteLLM with tool calling, cost tracking, typed exceptions — proven against Gemini
+- S02 complete: Docker sandbox with Kali image, nmap tool execution + XML parser, clean container lifecycle
+- `pip install -e .` works, `0xpwn --help` responds, 20 unit tests + 4 integration tests passing for sandbox
+- Total: 43 S01 unit tests + 2 S01 integration tests + 20 S02 unit tests + 4 S02 integration tests = 69 tests
+- "Docker exploitation networking" risk retired — proven nmap runs in container against Docker bridge network
 - Planning artifacts: research.md, 0xpwn-spec.jsx, strix-gap-analysis.jsx, 0xpwn-brand-kit.jsx
-- Next: S02 (Docker Sandbox + Tool Execution)
+- Next: S03 (ReAct Agent Loop)
 
 ## Architecture / Key Patterns
 
 - **Agent engine:** ReAct loop with multi-agent coordination (Planner, Executor, Perceptor, Validator, Reporter)
-- **Sandbox:** Docker container running custom Kali image (ghcr.io/0xpwn/sandbox) with NET_ADMIN/NET_RAW capabilities
+- **Sandbox:** Docker container running custom Kali image (ghcr.io/0xpwn/sandbox) with NET_ADMIN/NET_RAW capabilities. Async context manager with labeled lifecycle and orphan cleanup.
+- **Tool executors:** NmapExecutor pattern — constructor takes DockerSandbox, async run() returns ToolResult with parsed_output. S04 replicates for 4 more tools.
 - **LLM layer:** LiteLLM for provider-agnostic access to 100+ models including Ollama for local
 - **CLI:** Typer + Rich for streaming output, Textual for interactive TUI (M004)
 - **State:** Pydantic models, SQLite persistence (M002), event-sourced audit log
