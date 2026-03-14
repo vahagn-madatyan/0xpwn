@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "0xpwn"
+version = "0.1.0"
+description = "AI-powered penetration testing engine"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "litellm>=1.0",
+    "typer>=0.9",
+    "rich>=13.0",
+    "structlog>=23.0",
+    "httpx>=0.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-mock>=3.10",
+]
+
+[project.scripts]
+"0xpwn" = "oxpwn.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/oxpwn"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests requiring external services (deselect with '-m \"not integration\"')",
+]
+asyncio_mode = "auto"

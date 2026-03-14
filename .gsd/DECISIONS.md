@@ -16,3 +16,7 @@
 | 8 | 2026-03-12 | project | External data sources in M001 | Include NVD/CVE enrichment | Enriched findings significantly more useful for bug bounty reports; worth the added slice | yes |
 | 9 | 2026-03-12 | project | Target user for launch | Bug bounty hunters | Speed-obsessed, cost-sensitive, value PoC quality — best fit for autonomous agent value prop | yes |
 | 10 | 2026-03-12 | project | CLI framework | Typer + Rich | Typer for CLI structure, Rich for streaming output and formatting — well-supported, fast to build | yes |
+| 11 | 2026-03-12 | S01 | Build backend | hatchling | Lightweight, native src/ layout support, no setup.py needed — simplest option for pure-Python packages | yes |
+| 12 | 2026-03-12 | S01 | Token tracking model | Nested `TokenUsage` Pydantic model | Separate input/output/total as a dedicated model rather than flat fields — mirrors provider response shapes, cleaner composition | yes |
+| 13 | 2026-03-12 | S01 | ScanState mutation strategy | Mutable methods (add_finding, advance_phase, etc.) | Scan sessions are inherently mutable lifecycle objects; immutable updates would add ceremony without benefit here | yes |
+| 14 | 2026-03-13 | S01 | Integration test LLM provider | `gemini/gemini-2.5-flash` via GEMINI_API_KEY | Available key, free tier; gemini-2.0-flash quota exhausted. Proves provider-agnostic design by using non-default provider. Override via `OXPWN_TEST_MODEL` env var | yes |

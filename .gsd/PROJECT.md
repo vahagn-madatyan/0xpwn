@@ -10,9 +10,11 @@ A bug bounty hunter runs `0xpwn scan --target <url>` and watches an AI agent sys
 
 ## Current State
 
-- 2 git commits (init only), no source code
-- Planning artifacts: research.md (20+ tool landscape), 0xpwn-spec.jsx (full architecture), strix-gap-analysis.jsx (feature comparison), 0xpwn-brand-kit.jsx (identity/CLI mockups)
-- GSD milestone M001 planned, not started
+- S01 complete: Python package scaffolded, Pydantic models defined, async LLM client proven
+- `pip install -e .` works, `0xpwn --help` responds, 43 unit tests + 2 integration tests passing
+- LLMClient wraps LiteLLM with tool calling, cost tracking, typed exceptions — proven against Gemini
+- Planning artifacts: research.md, 0xpwn-spec.jsx, strix-gap-analysis.jsx, 0xpwn-brand-kit.jsx
+- Next: S02 (Docker Sandbox + Tool Execution)
 
 ## Architecture / Key Patterns
 
