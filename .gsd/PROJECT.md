@@ -13,18 +13,20 @@ A bug bounty hunter runs `0xpwn scan --target <url>` and watches an AI agent sys
 - S01 complete: Python package scaffolded, Pydantic models defined, async LLM client proven
 - S02 complete: Docker sandbox with Kali image, nmap tool execution + XML parser, clean container lifecycle
 - S03 complete: ReAct agent loop with tool registry, phase-aware prompts, event protocol, autonomous Recon→Scanning proven with real LLM + Docker
+- S04 complete: Full five-tool core suite (`nmap`, `httpx`, `subfinder`, `nuclei`, `ffuf`) registered for the agent with compact parsers and real Docker proofs
 - `pip install -e .` works, `0xpwn --help` responds
-- Total: 43 S01 unit + 2 S01 integration + 20 S02 unit + 4 S02 integration + 24 S03 unit + 1 S03 integration = 94 tests
+- Current test inventory: 127 collected tests; S04 slice verification passed with 50 unit checks and 7 integration checks
 - "Docker exploitation networking" risk retired (S02)
-- "Agent loop quality" risk partially retired — agent autonomously selects nmap, executes in Docker, accumulates state, advances phases (S03)
-- Next: S04 (Tool Suite Integration — httpx, subfinder, nuclei, ffuf)
+- "Agent loop quality" risk partially retired — agent autonomously selects tools, executes in Docker, accumulates state, and advances phases (S03)
+- "Tool output parsing" risk retired for the five-tool M001 core suite (S04)
+- Next: S05 (Streaming CLI + Real-time Output)
 
 ## Architecture / Key Patterns
 
 - **Agent engine:** ReactAgent — ReAct loop with outer phase iteration, inner tool dispatch cycle. Composes LLMClient + DockerSandbox + ToolRegistry.
-- **Tool registry:** ToolRegistry maps tool names to OpenAI function schemas + async executor factories. `register_default_tools()` registers nmap; S04 adds 4 more.
-- **Sandbox:** Docker container running custom Kali image (ghcr.io/0xpwn/sandbox) with NET_ADMIN/NET_RAW capabilities. Async context manager with labeled lifecycle and orphan cleanup.
-- **Tool executors:** NmapExecutor pattern — constructor takes DockerSandbox, async run() returns ToolResult with parsed_output. S04 replicates for 4 more tools.
+- **Tool registry:** ToolRegistry maps tool names to OpenAI function schemas + async executor factories. `register_default_tools()` now registers the five-tool M001 core suite: `nmap`, `httpx`, `subfinder`, `nuclei`, and `ffuf`.
+- **Sandbox:** Docker container running custom Kali image (ghcr.io/0xpwn/sandbox) with NET_ADMIN/NET_RAW capabilities. Async context manager with labeled lifecycle and orphan cleanup plus deterministic in-container HTTP proof fixtures for tool-suite integration.
+- **Tool executors:** `NmapExecutor`, `HttpxExecutor`, `SubfinderExecutor`, `NucleiExecutor`, and `FfufExecutor` share the same pattern — constructor takes `DockerSandbox`, async `run()` returns `ToolResult` with compact `parsed_output`.
 - **Event protocol:** Typed dataclasses (ReasoningEvent, ToolCallEvent, ToolResultEvent, PhaseTransitionEvent, ErrorEvent) + AgentEventCallback Protocol. S05 implements with Rich rendering.
 - **LLM layer:** LiteLLM for provider-agnostic access to 100+ models including Ollama for local
 - **CLI:** Typer + Rich for streaming output, Textual for interactive TUI (M004)

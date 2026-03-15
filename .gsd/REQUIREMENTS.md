@@ -15,17 +15,6 @@ This file is the explicit capability and coverage contract for 0xpwn.
 - Validation: unmapped
 - Notes: Must handle phase transitions, state accumulation, and re-planning on failure
 
-### R002 — Isolated Docker/Kali sandbox execution
-- Class: core-capability
-- Status: active
-- Description: All security tools run inside a Docker container with a custom Kali-based image, isolated from the host system
-- Why it matters: Safety — pentesting tools must never run on the host. Reproducibility — consistent tool versions across environments
-- Source: user
-- Primary owning slice: M001/S02
-- Supporting slices: M001/S08
-- Validation: unmapped
-- Notes: Container gets NET_ADMIN/NET_RAW capabilities, published to ghcr.io/0xpwn/sandbox
-
 ### R003 — Provider-agnostic LLM support (100+ via LiteLLM)
 - Class: core-capability
 - Status: active
@@ -270,7 +259,16 @@ This file is the explicit capability and coverage contract for 0xpwn.
 
 ## Validated
 
-(none yet)
+### R002 — Isolated Docker/Kali sandbox execution
+- Class: core-capability
+- Status: validated
+- Description: All security tools run inside a Docker container with a custom Kali-based image, isolated from the host system
+- Why it matters: Safety — pentesting tools must never run on the host. Reproducibility — consistent tool versions across environments
+- Source: user
+- Primary owning slice: M001/S02
+- Supporting slices: M001/S08
+- Validation: Validated by `pytest tests/integration/test_sandbox_integration.py::test_nmap_executor_real_scan tests/integration/test_tool_suite_integration.py -m integration -v` plus the S04 sandbox image verification command proving `nmap`, `httpx`, `subfinder`, `nuclei`, `ffuf`, and `python3` inside the custom Kali image
+- Notes: Container gets NET_ADMIN/NET_RAW capabilities, published to ghcr.io/0xpwn/sandbox
 
 ## Deferred
 
@@ -424,7 +422,7 @@ This file is the explicit capability and coverage contract for 0xpwn.
 | ID | Class | Status | Primary owner | Supporting | Proof |
 |---|---|---|---|---|---|
 | R001 | core-capability | active | M001/S03 | M001/S04, M001/S08 | unmapped |
-| R002 | core-capability | active | M001/S02 | M001/S08 | unmapped |
+| R002 | core-capability | validated | M001/S02 | M001/S08 | `test_nmap_executor_real_scan` + `test_tool_suite_integration.py` real Docker verification |
 | R003 | core-capability | active | M001/S01 | M001/S06 | unmapped |
 | R004 | primary-user-loop | active | M001/S05 | M001/S08 | unmapped |
 | R005 | launchability | active | M001/S06 | none | unmapped |
@@ -463,7 +461,7 @@ This file is the explicit capability and coverage contract for 0xpwn.
 
 ## Coverage Summary
 
-- Active requirements: 24
+- Active requirements: 23
 - Mapped to slices: 24
-- Validated: 0
+- Validated: 1
 - Unmapped active requirements: 0

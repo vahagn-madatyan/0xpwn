@@ -1,0 +1,21 @@
+id: deterministic-admin-panel
+
+info:
+  name: Deterministic Admin Panel Fixture
+  author: 0xpwn
+  severity: info
+  description: Matches the in-repo sandbox fixture served from /admin/.
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/admin/"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - "0xpwn deterministic admin panel fixture"

@@ -83,18 +83,21 @@ def build_phase_summary(
 
 _PHASE_GUIDANCE: dict[Phase, str] = {
     Phase.recon: (
-        "Enumerate the target's attack surface. Discover open ports, running "
-        "services, and their versions. Use nmap with service detection (-sV). "
-        "Consider scanning common port ranges first, then expanding if needed. "
-        "Once you have a clear picture of exposed services, summarize your "
-        "findings and move to the next phase."
+        "Enumerate the target's attack surface. For domain targets, start with "
+        "subfinder to discover candidate subdomains. Use httpx to probe live "
+        "HTTP(S) services, capture status codes and titles, and confirm which web "
+        "targets are reachable. Use nmap with service detection (-sV) to map open "
+        "ports and versions on hosts that matter. Expand carefully from the most "
+        "promising exposed services, then summarize the confirmed surface before "
+        "moving to the next phase."
     ),
     Phase.scanning: (
-        "Probe the services discovered during recon for vulnerabilities. "
-        "Use targeted scans with appropriate flags and scripts. Focus on "
-        "high-value services (HTTP, SSH, databases). Look for version-specific "
-        "vulnerabilities, misconfigurations, and default credentials. "
-        "Summarize confirmed vulnerabilities when scanning is complete."
+        "Probe the services confirmed during recon for vulnerabilities. Use nuclei "
+        "with focused templates for high-signal vulnerability checks, ffuf for web "
+        "content discovery when a web endpoint is exposed, and nmap version/script "
+        "probes when you need deeper validation of a service. Focus on high-value "
+        "services and paths, confirm likely issues with targeted follow-up, and "
+        "summarize confirmed vulnerabilities when scanning is complete."
     ),
 }
 

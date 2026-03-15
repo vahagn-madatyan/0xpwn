@@ -61,7 +61,7 @@ This milestone is complete only when all are true:
 - [x] **S03: ReAct Agent Loop** `risk:high` `depends:[S01,S02]`
   > After this: Agent autonomously reasons through at least Recon and Scanning phases, selects tools, executes them in the sandbox, parses results, accumulates state, and transitions between phases — proven by integration test with real LLM and Docker
 
-- [ ] **S04: Tool Suite Integration** `risk:medium` `depends:[S02,S03]`
+- [x] **S04: Tool Suite Integration** `risk:medium` `depends:[S02,S03]`
   > After this: Agent uses all 5 core tools (nmap, httpx, subfinder, nuclei, ffuf) with structured Pydantic output parsers, each tool proven against real targets inside the sandbox
 
 - [ ] **S05: Streaming CLI + Real-time Output** `risk:medium` `depends:[S03]`

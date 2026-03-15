@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from oxpwn.agent.tools import ToolRegistry, parse_tool_arguments, register_default_tools
 from oxpwn.core.models import ToolResult
+from oxpwn.sandbox.tools.ffuf import DEFAULT_FFUF_WORDLIST_PATH
 
 
 # ---------------------------------------------------------------------------
@@ -18,6 +18,9 @@ from oxpwn.core.models import ToolResult
 
 def _make_sandbox() -> MagicMock:
     return MagicMock()
+
+
+EXPECTED_DEFAULT_TOOLS = ["nmap", "httpx", "subfinder", "nuclei", "ffuf"]
 
 
 def _make_tool_result(**overrides) -> ToolResult:
@@ -128,28 +131,73 @@ class TestToolRegistry:
 
 
 class TestRegisterDefaultTools:
-    """Nmap is registered by the default factory helper."""
+    """The default helper exposes the full five-tool core suite."""
 
-    def test_nmap_registered(self):
+    def test_full_suite_registered_in_stable_order(self):
         registry = ToolRegistry()
         register_default_tools(registry)
 
-        assert "nmap" in registry.tool_names
-        schemas = registry.get_schemas()
-        nmap_schema = schemas[0]["function"]
-        assert nmap_schema["name"] == "nmap"
-        assert "target" in nmap_schema["parameters"]["properties"]
-        assert "target" in nmap_schema["parameters"]["required"]
+        assert registry.tool_names == EXPECTED_DEFAULT_TOOLS
+        schema_names = [schema["function"]["name"] for schema in registry.get_schemas()]
+        assert schema_names == EXPECTED_DEFAULT_TOOLS
 
-    def test_nmap_schema_properties(self):
+    def test_default_tool_schemas_have_expected_parameters(self):
         registry = ToolRegistry()
         register_default_tools(registry)
 
-        props = registry.get_schemas()[0]["function"]["parameters"]["properties"]
-        assert "target" in props
-        assert "ports" in props
-        assert "flags" in props
-        assert props["target"]["type"] == "string"
+        schemas = {
+            schema["function"]["name"]: schema["function"]["parameters"]
+            for schema in registry.get_schemas()
+        }
+
+        assert schemas["nmap"]["required"] == ["target"]
+        assert set(schemas["nmap"]["properties"]) == {"target", "ports", "flags"}
+
+        assert schemas["httpx"]["required"] == ["targets"]
+        assert set(schemas["httpx"]["properties"]) == {
+            "targets",
+            "ports",
+            "path",
+            "follow_redirects",
+            "tech_detect",
+            "timeout_seconds",
+            "threads",
+        }
+        assert schemas["httpx"]["properties"]["targets"]["oneOf"][0]["type"] == "string"
+        assert schemas["httpx"]["properties"]["targets"]["oneOf"][1]["type"] == "array"
+
+        assert schemas["subfinder"]["required"] == ["domains"]
+        assert set(schemas["subfinder"]["properties"]) == {
+            "domains",
+            "all_sources",
+            "recursive",
+            "timeout_seconds",
+            "max_time_minutes",
+        }
+        assert schemas["subfinder"]["properties"]["domains"]["oneOf"][1]["items"]["type"] == "string"
+
+        assert schemas["nuclei"]["required"] == ["targets", "templates"]
+        assert set(schemas["nuclei"]["properties"]) == {
+            "targets",
+            "templates",
+            "follow_redirects",
+            "timeout_seconds",
+            "retries",
+            "rate_limit",
+        }
+        assert schemas["nuclei"]["properties"]["templates"]["oneOf"][0]["type"] == "string"
+
+        assert schemas["ffuf"]["required"] == ["url"]
+        assert set(schemas["ffuf"]["properties"]) == {
+            "url",
+            "wordlist_path",
+            "follow_redirects",
+            "match_status",
+            "timeout_seconds",
+            "threads",
+        }
+        assert schemas["ffuf"]["properties"]["wordlist_path"]["default"] == DEFAULT_FFUF_WORDLIST_PATH
+        assert "FUZZ" in schemas["ffuf"]["properties"]["url"]["description"]
 
 
 class TestParseToolArguments:

@@ -9,6 +9,7 @@ import structlog
 
 from oxpwn.core.models import ToolResult
 from oxpwn.sandbox.docker import DockerSandbox
+from oxpwn.sandbox.tools.ffuf import DEFAULT_FFUF_WORDLIST_PATH
 
 logger = structlog.get_logger("oxpwn.agent.tools")
 
@@ -127,6 +128,21 @@ class _ToolEntry:
 # Default tool registrations
 # ---------------------------------------------------------------------------
 
+
+def _string_or_list_schema(description: str) -> dict[str, Any]:
+    return {
+        "description": description,
+        "oneOf": [
+            {"type": "string"},
+            {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+        ],
+    }
+
+
 _NMAP_PARAMETERS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -147,10 +163,159 @@ _NMAP_PARAMETERS_SCHEMA: dict[str, Any] = {
     "required": ["target"],
 }
 
+_HTTPX_PARAMETERS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "targets": _string_or_list_schema(
+            "One hostname/URL or a list of targets to probe for live HTTP(S) services.",
+        ),
+        "ports": {
+            "type": "string",
+            "description": "Optional comma-separated port list for HTTP probing (e.g. '80,443,8080').",
+        },
+        "path": {
+            "type": "string",
+            "description": "Optional request path to probe on every target (for example '/admin/').",
+        },
+        "follow_redirects": {
+            "type": "boolean",
+            "description": "Follow HTTP redirects before reporting the final response.",
+            "default": False,
+        },
+        "tech_detect": {
+            "type": "boolean",
+            "description": "Enable lightweight technology detection in the structured output.",
+            "default": True,
+        },
+        "timeout_seconds": {
+            "type": "integer",
+            "description": "Per-request timeout in seconds.",
+            "default": 5,
+            "minimum": 1,
+        },
+        "threads": {
+            "type": "integer",
+            "description": "Optional concurrent thread count for larger batches.",
+            "minimum": 1,
+        },
+    },
+    "required": ["targets"],
+}
+
+_SUBFINDER_PARAMETERS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "domains": _string_or_list_schema(
+            "One root domain or a list of root domains to enumerate for passive subdomains.",
+        ),
+        "all_sources": {
+            "type": "boolean",
+            "description": "Use all configured passive sources instead of the default subset.",
+            "default": False,
+        },
+        "recursive": {
+            "type": "boolean",
+            "description": "Enable recursive subdomain discovery where supported by the source.",
+            "default": False,
+        },
+        "timeout_seconds": {
+            "type": "integer",
+            "description": "Per-source timeout in seconds.",
+            "default": 30,
+            "minimum": 1,
+        },
+        "max_time_minutes": {
+            "type": "integer",
+            "description": "Maximum wall-clock runtime in minutes.",
+            "default": 10,
+            "minimum": 1,
+        },
+    },
+    "required": ["domains"],
+}
+
+_NUCLEI_PARAMETERS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "targets": _string_or_list_schema(
+            "One target URL/host or a list of targets to scan with nuclei templates.",
+        ),
+        "templates": _string_or_list_schema(
+            "One nuclei template path or a list of template paths to run.",
+        ),
+        "follow_redirects": {
+            "type": "boolean",
+            "description": "Follow HTTP redirects during template execution.",
+            "default": False,
+        },
+        "timeout_seconds": {
+            "type": "integer",
+            "description": "Per-request timeout in seconds.",
+            "default": 10,
+            "minimum": 1,
+        },
+        "retries": {
+            "type": "integer",
+            "description": "Retry count for transient request failures.",
+            "default": 1,
+            "minimum": 0,
+        },
+        "rate_limit": {
+            "type": "integer",
+            "description": "Optional per-second request rate limit for gentler scans.",
+            "minimum": 1,
+        },
+    },
+    "required": ["targets", "templates"],
+}
+
+_FFUF_PARAMETERS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "url": {
+            "type": "string",
+            "description": "Target URL containing the FUZZ keyword (for example 'http://host/FUZZ/').",
+        },
+        "wordlist_path": {
+            "type": "string",
+            "description": "Wordlist path inside the sandbox. Defaults to the deterministic integration-test wordlist.",
+            "default": DEFAULT_FFUF_WORDLIST_PATH,
+        },
+        "follow_redirects": {
+            "type": "boolean",
+            "description": "Follow redirects while fuzzing.",
+            "default": False,
+        },
+        "match_status": {
+            "type": "string",
+            "description": "HTTP status matcher passed to ffuf (for example '200' or '200,204,301').",
+            "default": "all",
+        },
+        "timeout_seconds": {
+            "type": "integer",
+            "description": "Per-request timeout in seconds.",
+            "default": 10,
+            "minimum": 1,
+        },
+        "threads": {
+            "type": "integer",
+            "description": "Optional concurrent worker count.",
+            "minimum": 1,
+        },
+    },
+    "required": ["url"],
+}
+
 
 def register_default_tools(registry: ToolRegistry) -> None:
-    """Register the built-in nmap tool (more tools added in S04)."""
-    from oxpwn.sandbox.tools.nmap import NmapExecutor
+    """Register the built-in five-tool core suite for the agent."""
+    from oxpwn.sandbox.tools import (
+        FfufExecutor,
+        HttpxExecutor,
+        NmapExecutor,
+        NucleiExecutor,
+        SubfinderExecutor,
+    )
 
     registry.register(
         name="nmap",
@@ -160,6 +325,42 @@ def register_default_tools(registry: ToolRegistry) -> None:
         ),
         parameters_schema=_NMAP_PARAMETERS_SCHEMA,
         executor_factory=lambda sandbox: NmapExecutor(sandbox),
+    )
+    registry.register(
+        name="httpx",
+        description=(
+            "Probe one or more HTTP(S) targets and return structured live-service "
+            "metadata such as URLs, status codes, titles, and technologies."
+        ),
+        parameters_schema=_HTTPX_PARAMETERS_SCHEMA,
+        executor_factory=lambda sandbox: HttpxExecutor(sandbox),
+    )
+    registry.register(
+        name="subfinder",
+        description=(
+            "Enumerate passive subdomains for one or more root domains and return "
+            "deduplicated hostnames with source attribution."
+        ),
+        parameters_schema=_SUBFINDER_PARAMETERS_SCHEMA,
+        executor_factory=lambda sandbox: SubfinderExecutor(sandbox),
+    )
+    registry.register(
+        name="nuclei",
+        description=(
+            "Run focused nuclei templates against one or more targets and return "
+            "compact structured findings."
+        ),
+        parameters_schema=_NUCLEI_PARAMETERS_SCHEMA,
+        executor_factory=lambda sandbox: NucleiExecutor(sandbox),
+    )
+    registry.register(
+        name="ffuf",
+        description=(
+            "Fuzz a web path containing FUZZ and return compact structured findings "
+            "for discovered routes."
+        ),
+        parameters_schema=_FFUF_PARAMETERS_SCHEMA,
+        executor_factory=lambda sandbox: FfufExecutor(sandbox),
     )
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -19,7 +18,7 @@ from oxpwn.agent.events import (
 )
 from oxpwn.agent.exceptions import AgentMaxIterationsError
 from oxpwn.agent.react import ReactAgent
-from oxpwn.agent.tools import ToolRegistry
+from oxpwn.agent.tools import ToolRegistry, register_default_tools
 from oxpwn.core.models import LLMResponse, Phase, ScanState, TokenUsage, ToolResult
 
 
@@ -81,6 +80,9 @@ def _make_scan_state(target: str = "10.0.0.1") -> ScanState:
     return ScanState(target=target, current_phase=Phase.recon)
 
 
+EXPECTED_DEFAULT_TOOLS = ["nmap", "httpx", "subfinder", "nuclei", "ffuf"]
+
+
 def _make_registry() -> ToolRegistry:
     """Registry with a mock nmap tool."""
     registry = ToolRegistry()
@@ -101,6 +103,51 @@ def _make_registry() -> ToolRegistry:
             "required": ["target"],
         },
         executor_factory=lambda s: MockNmapExecutor(s),
+    )
+    return registry
+
+
+def _make_httpx_registry() -> ToolRegistry:
+    """Registry with a mock httpx tool for parsed_output contract tests."""
+    registry = ToolRegistry()
+
+    class MockHttpxExecutor:
+        def __init__(self, sandbox):
+            self.sandbox = sandbox
+
+        async def run(
+            self,
+            targets: str,
+            path: str | None = None,
+            follow_redirects: bool = False,
+        ) -> ToolResult:
+            path_suffix = path or ""
+            redirect_flag = " --follow-redirects" if follow_redirects else ""
+            return _tool_result(
+                tool_name="httpx",
+                command=f"httpx {targets}{path_suffix}{redirect_flag}",
+                stdout="httpx raw stdout that should not be sent back to the LLM",
+                parsed_output={
+                    "count": 1,
+                    "services": [
+                        {
+                            "url": f"http://{targets}{path_suffix}",
+                            "status_code": 200,
+                            "title": "Mock Admin",
+                        },
+                    ],
+                },
+            )
+
+    registry.register(
+        name="httpx",
+        description="Probe HTTP services.",
+        parameters_schema={
+            "type": "object",
+            "properties": {"targets": {"type": "string"}},
+            "required": ["targets"],
+        },
+        executor_factory=lambda s: MockHttpxExecutor(s),
     )
     return registry
 
@@ -449,3 +496,60 @@ class TestScanStateAccumulation:
         # Content should be JSON (parsed_output), not raw stdout
         parsed = json.loads(tool_msg["content"])
         assert "hosts" in parsed
+
+    @pytest.mark.asyncio
+    async def test_non_nmap_parsed_output_fed_to_llm(self):
+        """The parsed_output dict contract should hold for the newly registered tool types too."""
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            _llm_response(
+                content="Probe the web service.",
+                tool_calls=[_tool_call("httpx", {"targets": "127.0.0.1:18080", "path": "/admin/"})],
+            ),
+            _llm_response(content="Recon done."),
+            _llm_response(content="Scanning done."),
+        ])
+
+        sandbox = MagicMock()
+        agent = ReactAgent(llm, sandbox, _make_httpx_registry(), max_iterations_per_phase=5)
+        await agent.run(_make_scan_state(target="127.0.0.1:18080"))
+
+        second_call_messages = llm.complete.call_args_list[1][0][0]
+        tool_msg = next(m for m in second_call_messages if m.get("role") == "tool")
+
+        parsed = json.loads(tool_msg["content"])
+        assert parsed["count"] == 1
+        assert parsed["services"][0]["status_code"] == 200
+        assert tool_msg["name"] == "httpx"
+        assert "raw stdout" not in tool_msg["content"]
+
+
+class TestDefaultRegistryPromptWiring:
+    """The default registry inventory and prompt guidance stay agent-visible."""
+
+    @pytest.mark.asyncio
+    async def test_default_registry_tools_and_phase_hints_reach_the_llm(self):
+        llm = AsyncMock()
+        llm.complete = AsyncMock(side_effect=[
+            _llm_response(content="Recon done."),
+            _llm_response(content="Scanning done."),
+        ])
+
+        sandbox = MagicMock()
+        registry = ToolRegistry()
+        register_default_tools(registry)
+        agent = ReactAgent(llm, sandbox, registry, max_iterations_per_phase=5)
+
+        await agent.run(_make_scan_state(target="https://example.com"))
+
+        first_call = llm.complete.call_args_list[0]
+        second_call = llm.complete.call_args_list[1]
+
+        recon_system_prompt = first_call.args[0][0]["content"]
+        scanning_system_prompt = second_call.args[0][0]["content"]
+        tool_names = [schema["function"]["name"] for schema in first_call.kwargs["tools"]]
+
+        assert tool_names == EXPECTED_DEFAULT_TOOLS
+        assert "Available tools: nmap, httpx, subfinder, nuclei, ffuf" in recon_system_prompt
+        assert all(tool in recon_system_prompt for tool in ("subfinder", "httpx", "nmap"))
+        assert all(tool in scanning_system_prompt for tool in ("nuclei", "ffuf", "nmap"))
