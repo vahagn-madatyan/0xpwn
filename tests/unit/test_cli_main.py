@@ -152,7 +152,10 @@ async def test_scan_async_composes_runtime_with_fake_dependencies() -> None:
                     iteration=1,
                 )
             )
-            scan_state.phases_completed = [Phase.recon, Phase.scanning]
+            scan_state.phases_completed = [
+                Phase.recon, Phase.scanning, Phase.exploitation,
+                Phase.validation, Phase.reporting,
+            ]
             scan_state.total_tokens = 42
             scan_state.total_cost = 0.12
             return scan_state
@@ -393,3 +396,155 @@ def test_config_help_shows_subcommands() -> None:
     assert "show" in result.output
     assert "reset" in result.output
     assert "wizard" in result.output
+
+
+# ---------------------------------------------------------------------------
+# S08: Enrichment wiring tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_scan_async_calls_enrichment_after_agent_run() -> None:
+    """_scan_async() invokes findings_from_tool_results and enrich_findings."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from oxpwn.core.models import Finding, Severity, ToolResult
+
+    console = Console(record=True, width=120, color_system=None, force_terminal=False)
+
+    class FakeLLMClient:
+        def __init__(self, model, *, api_key=None, base_url=None):
+            pass
+
+    class FakeSandbox:
+        def __init__(self, image, scan_id, *, network_mode):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    class FakeAgent:
+        def __init__(self, llm, sandbox, registry, *, max_iterations_per_phase, event_callback):
+            self._cb = event_callback
+
+        async def run(self, scan_state):
+            await self._cb.on_event(
+                ReasoningEvent(content="Starting.", phase="recon", iteration=1)
+            )
+            scan_state.phases_completed = [
+                Phase.recon, Phase.scanning, Phase.exploitation,
+                Phase.validation, Phase.reporting,
+            ]
+            # Add a tool result so enrichment has something to work with
+            scan_state.add_tool_result(ToolResult(
+                tool_name="nuclei",
+                command="nuclei -t cves/ -u http://target",
+                stdout="",
+                stderr="",
+                exit_code=0,
+                duration_ms=100,
+                parsed_output={"findings": [{"template_id": "CVE-2021-44228", "name": "Log4Shell", "severity": "critical", "matched_at": "http://target"}]},
+            ))
+            return scan_state
+
+    config = main.ScanRuntimeConfig(
+        target="localhost",
+        model="test/model",
+        scan_id="scan-enrich-test",
+    )
+
+    # Patch enrichment functions to track calls
+    mock_enrich = AsyncMock(return_value=[])
+    mock_extract = MagicMock(return_value=[
+        Finding(title="Log4Shell", severity=Severity.critical, tool_name="nuclei", cve_id="CVE-2021-44228", description="RCE via Log4j", url="http://target", evidence="CVE-2021-44228"),
+    ])
+
+    with patch("oxpwn.cli.main.findings_from_tool_results", mock_extract), \
+         patch("oxpwn.cli.main.enrich_findings", mock_enrich), \
+         patch("oxpwn.cli.main.NvdClient") as mock_nvd_cls, \
+         patch("oxpwn.cli.main.CveCache") as mock_cache_cls:
+        mock_nvd_instance = MagicMock()
+        mock_nvd_instance.close = AsyncMock()
+        mock_nvd_cls.return_value = mock_nvd_instance
+        mock_cache_instance = MagicMock()
+        mock_cache_cls.return_value = mock_cache_instance
+
+        result = await main._scan_async(
+            config,
+            console=console,
+            llm_client_factory=FakeLLMClient,
+            sandbox_factory=FakeSandbox,
+            agent_factory=FakeAgent,
+        )
+
+    # Enrichment was called
+    mock_extract.assert_called_once()
+    mock_enrich.assert_called_once()
+    # NVD client and cache were closed
+    mock_nvd_instance.close.assert_called_once()
+    mock_cache_instance.close.assert_called_once()
+    # Findings were assigned to state
+    assert len(result.findings) == 1
+    assert result.findings[0].title == "Log4Shell"
+
+
+@pytest.mark.asyncio
+async def test_scan_async_enrichment_failure_does_not_crash() -> None:
+    """Enrichment errors are caught and logged, never crash the scan."""
+    from unittest.mock import MagicMock, patch
+
+    console = Console(record=True, width=120, color_system=None, force_terminal=False)
+
+    class FakeLLMClient:
+        def __init__(self, model, *, api_key=None, base_url=None):
+            pass
+
+    class FakeSandbox:
+        def __init__(self, image, scan_id, *, network_mode):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    class FakeAgent:
+        def __init__(self, llm, sandbox, registry, *, max_iterations_per_phase, event_callback):
+            self._cb = event_callback
+
+        async def run(self, scan_state):
+            await self._cb.on_event(
+                ReasoningEvent(content="Starting.", phase="recon", iteration=1)
+            )
+            scan_state.phases_completed = [
+                Phase.recon, Phase.scanning, Phase.exploitation,
+                Phase.validation, Phase.reporting,
+            ]
+            return scan_state
+
+    config = main.ScanRuntimeConfig(
+        target="localhost",
+        model="test/model",
+        scan_id="scan-enrich-fail",
+    )
+
+    # Make findings_from_tool_results raise to test the try/except
+    mock_extract = MagicMock(side_effect=RuntimeError("enrichment boom"))
+
+    with patch("oxpwn.cli.main.findings_from_tool_results", mock_extract):
+        # Should NOT raise — enrichment failure is caught
+        result = await main._scan_async(
+            config,
+            console=console,
+            llm_client_factory=FakeLLMClient,
+            sandbox_factory=FakeSandbox,
+            agent_factory=FakeAgent,
+        )
+
+    # Scan completed despite enrichment failure
+    assert result.target == "localhost"
+    assert result.end_time is not None

@@ -99,6 +99,30 @@ _PHASE_GUIDANCE: dict[Phase, str] = {
         "services and paths, confirm likely issues with targeted follow-up, and "
         "summarize confirmed vulnerabilities when scanning is complete."
     ),
+    Phase.exploitation: (
+        "Review scanning findings and attempt targeted validation with available "
+        "tools. Use nuclei with specific CVE templates against confirmed vulnerable "
+        "endpoints, nmap scripts for service-specific exploitation checks, and any "
+        "other tools that can provide exploitation evidence. Synthesize evidence of "
+        "exploitability for each finding. If no dedicated exploitation tools are "
+        "available for a finding, document the theoretical impact and move on."
+    ),
+    Phase.validation: (
+        "Re-probe the top findings with targeted checks to confirm they are real "
+        "and not false positives. For each high/critical finding, run a focused "
+        "verification scan (e.g. nuclei with the exact template, nmap with the "
+        "specific script) to produce independent confirmation. Downgrade or remove "
+        "findings that cannot be reproduced. Summarize validated findings with "
+        "confidence levels when validation is complete."
+    ),
+    Phase.reporting: (
+        "Compile a structured summary of all confirmed findings. For each finding, "
+        "include: severity level, CVE ID (if applicable), affected URL or service, "
+        "evidence of the vulnerability, CVSS score (if enriched), and remediation "
+        "context or recommendations. Group findings by severity. Provide an "
+        "executive summary with the overall risk posture and priority remediation "
+        "steps. Do not call any tools — produce the final report as text output."
+    ),
 }
 
 _DEFAULT_GUIDANCE = (

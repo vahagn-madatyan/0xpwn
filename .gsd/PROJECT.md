@@ -17,12 +17,10 @@ A bug bounty hunter runs `0xpwn scan --target <url>` and watches an AI agent sys
 - S05 complete: `0xpwn scan --target <url>` streams agent reasoning, phase transitions, raw tool output, and parsed results in real-time with Rich formatting
 - S06 complete: First-run wizard detects Ollama, guides API key setup, validates LLM connectivity, persists config to YAML; `0xpwn config show/reset/wizard` subcommands; config feeds into scan command
 - S07 complete: NVD-backed CVE enrichment pipeline — NVD client with rate limiting, SQLite cache with WAL mode, finding extraction from nuclei/ffuf/nmap, batch enrichment with CVSS/CWE/remediation population
-- `pip install -e .` works, `0xpwn --help` responds, `0xpwn scan --target` executes real async scan pipeline
-- Current test inventory: 252 unit tests passing; integration tests gated on Docker/LLM availability
-- "Docker exploitation networking" risk retired (S02)
-- "Agent loop quality" risk partially retired — agent autonomously selects tools, executes in Docker, accumulates state, and advances phases (S03)
-- "Tool output parsing" risk retired for the five-tool M001 core suite (S04)
-- Next: S08 (End-to-End Validation) — final milestone slice
+- S08 complete: Full 5-phase pipeline wired end-to-end — all phases have guidance, enrichment runs post-loop, Docker extra_hosts for host-network reachability, Juice Shop integration test, acceptance checklist
+- **M001 Core Engine complete** — all 8 slices done, 261 unit tests passing, 5 requirements validated (R001, R002, R004, R005, R006)
+- `pip install -e .` works, `0xpwn --help` responds, `0xpwn scan --target` executes full 5-phase async scan pipeline with enrichment
+- Next: M002 (Safety + Persistence) — permissions, budget controls, scope enforcement, SQLite, audit log
 
 ## Architecture / Key Patterns
 
@@ -44,7 +42,7 @@ See `.gsd/REQUIREMENTS.md` for the explicit capability contract, requirement sta
 
 ## Milestone Sequence
 
-- [ ] M001: Core Engine — Agent loop, sandbox, CLI, 5 tools, streaming output, CVE enrichment
+- [x] M001: Core Engine — Agent loop, sandbox, CLI, 5 tools, streaming output, CVE enrichment
 - [ ] M002: Safety + Persistence — Permissions, budget controls, scope enforcement, SQLite, audit log
 - [ ] M003: Validation + Reporting — PoC validation agent, 5 report formats, CVSS scoring, dedup
 - [ ] M004: Extensibility + Advanced — MCP, plugins, REST API, TUI, compliance mapping, freemium gating

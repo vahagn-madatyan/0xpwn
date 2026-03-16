@@ -24,6 +24,7 @@ from oxpwn.cli.streaming import RichStreamingCallback, redact_string, render_err
 from oxpwn.cli.wizard import run_wizard
 from oxpwn.config import ConfigManager, OxpwnConfig, resolve_config
 from oxpwn.core.models import ScanState
+from oxpwn.enrichment import CveCache, NvdClient, enrich_findings, findings_from_tool_results
 from oxpwn.llm.client import LLMClient
 from oxpwn.llm.exceptions import LLMAuthError, LLMError, LLMRateLimitError, LLMToolCallError
 from oxpwn.sandbox.docker import DockerSandbox
@@ -311,6 +312,23 @@ async def _scan_async(
         )
         final_state = await agent.run(scan_state)
 
+    # --- Enrichment: extract findings from tool results and enrich with NVD ---
+    enriched_count = 0
+    try:
+        extracted_findings = findings_from_tool_results(final_state.tool_results)
+        if extracted_findings:
+            nvd_client = NvdClient()
+            cve_cache = CveCache(db_path=":memory:")
+            try:
+                await enrich_findings(extracted_findings, nvd_client, cve_cache)
+            finally:
+                await nvd_client.close()
+                cve_cache.close()
+            final_state.findings = extracted_findings
+            enriched_count = len(extracted_findings)
+    except Exception:  # noqa: BLE001
+        logger.warning("cli.enrichment_failed", exc_info=True)
+
     final_state.end_time = datetime.now(timezone.utc)
     callback.render_final_summary(final_state)
 
@@ -321,6 +339,7 @@ async def _scan_async(
         phases_completed=[phase.value for phase in final_state.phases_completed],
         tool_results=len(final_state.tool_results),
         findings=len(final_state.findings),
+        enriched_findings=enriched_count,
         total_tokens=final_state.total_tokens,
         total_cost=final_state.total_cost,
     )

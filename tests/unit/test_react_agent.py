@@ -227,6 +227,12 @@ class TestReactAgentToolDispatch:
             _llm_response(content="Recon complete. Found port 80 open."),
             # Scanning iter 1: no tool call = phase complete immediately
             _llm_response(content="No further scanning needed."),
+            # Exploitation: phase complete
+            _llm_response(content="Exploitation done."),
+            # Validation: phase complete
+            _llm_response(content="Validation done."),
+            # Reporting: phase complete
+            _llm_response(content="Reporting done."),
         ])
 
         sandbox = MagicMock()
@@ -235,16 +241,19 @@ class TestReactAgentToolDispatch:
 
         result = await agent.run(state)
 
-        # LLM was called: 2 for recon + 1 for scanning = 3
-        assert llm.complete.call_count == 3
+        # LLM was called: 2 for recon + 1 for scanning + 3 for remaining = 6
+        assert llm.complete.call_count == 6
 
         # Tool result was accumulated
         assert len(result.tool_results) == 1
         assert result.tool_results[0].tool_name == "nmap"
 
-        # Phases completed
+        # All phases completed
         assert Phase.recon in result.phases_completed
         assert Phase.scanning in result.phases_completed
+        assert Phase.exploitation in result.phases_completed
+        assert Phase.validation in result.phases_completed
+        assert Phase.reporting in result.phases_completed
 
     @pytest.mark.asyncio
     async def test_tool_call_messages_have_matching_ids(self):
@@ -259,6 +268,9 @@ class TestReactAgentToolDispatch:
             ),
             _llm_response(content="Recon done."),
             _llm_response(content="Scanning done."),
+            _llm_response(content="Exploitation done."),
+            _llm_response(content="Validation done."),
+            _llm_response(content="Reporting done."),
         ]
         llm.complete = AsyncMock(side_effect=responses)
 
@@ -286,6 +298,12 @@ class TestPhaseTransition:
             _llm_response(content="Nothing to scan."),
             # Scanning: immediate phase complete
             _llm_response(content="Done."),
+            # Exploitation: immediate phase complete
+            _llm_response(content="Done."),
+            # Validation: immediate phase complete
+            _llm_response(content="Done."),
+            # Reporting: immediate phase complete
+            _llm_response(content="Done."),
         ])
 
         sandbox = MagicMock()
@@ -296,6 +314,9 @@ class TestPhaseTransition:
 
         assert Phase.recon in result.phases_completed
         assert Phase.scanning in result.phases_completed
+        assert Phase.exploitation in result.phases_completed
+        assert Phase.validation in result.phases_completed
+        assert Phase.reporting in result.phases_completed
         # No tool results since no tools were called
         assert len(result.tool_results) == 0
 
@@ -305,6 +326,9 @@ class TestPhaseTransition:
         llm.complete = AsyncMock(side_effect=[
             _llm_response(content="Recon done."),
             _llm_response(content="Scanning done."),
+            _llm_response(content="Exploitation done."),
+            _llm_response(content="Validation done."),
+            _llm_response(content="Reporting done."),
         ])
 
         sandbox = MagicMock()
@@ -313,8 +337,11 @@ class TestPhaseTransition:
 
         await agent.run(state)
 
-        # Both phases should be completed
-        assert state.phases_completed == [Phase.recon, Phase.scanning]
+        # All phases should be completed
+        assert state.phases_completed == [
+            Phase.recon, Phase.scanning, Phase.exploitation,
+            Phase.validation, Phase.reporting,
+        ]
 
 
 class TestMaxIterations:
@@ -358,6 +385,9 @@ class TestMultipleToolCalls:
             ),
             _llm_response(content="Recon done."),
             _llm_response(content="Scanning done."),
+            _llm_response(content="Exploitation done."),
+            _llm_response(content="Validation done."),
+            _llm_response(content="Reporting done."),
         ])
 
         sandbox = MagicMock()
@@ -397,6 +427,9 @@ class TestMalformedToolCall:
             ),
             _llm_response(content="Recon done."),
             _llm_response(content="Scanning done."),
+            _llm_response(content="Exploitation done."),
+            _llm_response(content="Validation done."),
+            _llm_response(content="Reporting done."),
         ])
 
         sandbox = MagicMock()
@@ -434,6 +467,9 @@ class TestEventCallbacks:
             ),
             _llm_response(content="Recon complete."),
             _llm_response(content="Scanning complete."),
+            _llm_response(content="Exploitation complete."),
+            _llm_response(content="Validation complete."),
+            _llm_response(content="Reporting complete."),
         ])
 
         sandbox = MagicMock()
@@ -450,7 +486,7 @@ class TestEventCallbacks:
         reasoning_events = collector.of_type(ReasoningEvent)
         chunk_events = collector.of_type(ToolOutputChunkEvent)
 
-        assert len(reasoning_events) == 3
+        assert len(reasoning_events) == 6
         assert reasoning_events[0].content == "Running nmap."
         assert len(collector.of_type(ToolCallEvent)) >= 1
         assert len(collector.of_type(ToolResultEvent)) >= 1
@@ -479,6 +515,9 @@ class TestEventCallbacks:
         llm.complete = AsyncMock(side_effect=[
             _llm_response(content="Done."),
             _llm_response(content="Done."),
+            _llm_response(content="Done."),
+            _llm_response(content="Done."),
+            _llm_response(content="Done."),
         ])
 
         sandbox = MagicMock()
@@ -499,6 +538,9 @@ class TestEventCallbacks:
         llm.complete = AsyncMock(side_effect=[
             _llm_response(content="Done."),
             _llm_response(content="Done."),
+            _llm_response(content="Done."),
+            _llm_response(content="Done."),
+            _llm_response(content="Done."),
         ])
 
         sandbox = MagicMock()
@@ -517,6 +559,9 @@ class TestScanStateAccumulation:
         llm.complete = AsyncMock(side_effect=[
             _llm_response(content="Done."),
             _llm_response(content="Done."),
+            _llm_response(content="Done."),
+            _llm_response(content="Done."),
+            _llm_response(content="Done."),
         ])
 
         sandbox = MagicMock()
@@ -524,10 +569,10 @@ class TestScanStateAccumulation:
         agent = ReactAgent(llm, sandbox, _make_registry())
         await agent.run(state)
 
-        # 2 LLM calls × 0.001 cost each
-        assert state.total_cost == pytest.approx(0.002)
-        # 2 LLM calls × 150 tokens each
-        assert state.total_tokens == 300
+        # 5 LLM calls × 0.001 cost each
+        assert state.total_cost == pytest.approx(0.005)
+        # 5 LLM calls × 150 tokens each
+        assert state.total_tokens == 750
 
     @pytest.mark.asyncio
     async def test_parsed_output_fed_to_llm(self):
@@ -540,6 +585,9 @@ class TestScanStateAccumulation:
             ),
             _llm_response(content="Recon done."),
             _llm_response(content="Scanning done."),
+            _llm_response(content="Exploitation done."),
+            _llm_response(content="Validation done."),
+            _llm_response(content="Reporting done."),
         ])
 
         sandbox = MagicMock()
@@ -565,6 +613,9 @@ class TestScanStateAccumulation:
             ),
             _llm_response(content="Recon done."),
             _llm_response(content="Scanning done."),
+            _llm_response(content="Exploitation done."),
+            _llm_response(content="Validation done."),
+            _llm_response(content="Reporting done."),
         ])
 
         sandbox = MagicMock()
@@ -590,6 +641,9 @@ class TestDefaultRegistryPromptWiring:
         llm.complete = AsyncMock(side_effect=[
             _llm_response(content="Recon done."),
             _llm_response(content="Scanning done."),
+            _llm_response(content="Exploitation done."),
+            _llm_response(content="Validation done."),
+            _llm_response(content="Reporting done."),
         ])
 
         sandbox = MagicMock()
@@ -610,3 +664,65 @@ class TestDefaultRegistryPromptWiring:
         assert "Available tools: nmap, httpx, subfinder, nuclei, ffuf" in recon_system_prompt
         assert all(tool in recon_system_prompt for tool in ("subfinder", "httpx", "nmap"))
         assert all(tool in scanning_system_prompt for tool in ("nuclei", "ffuf", "nmap"))
+
+
+# ---------------------------------------------------------------------------
+# S08: Phase order and guidance coverage tests
+# ---------------------------------------------------------------------------
+
+
+class TestPhaseOrderComplete:
+    """Verify _PHASE_ORDER contains all 5 phases in the correct order."""
+
+    def test_phase_order_has_five_phases(self):
+        from oxpwn.agent.react import _PHASE_ORDER
+
+        assert _PHASE_ORDER == [
+            Phase.recon,
+            Phase.scanning,
+            Phase.exploitation,
+            Phase.validation,
+            Phase.reporting,
+        ]
+
+    def test_phase_order_matches_all_enum_members(self):
+        from oxpwn.agent.react import _PHASE_ORDER
+
+        assert set(_PHASE_ORDER) == set(Phase)
+        assert len(_PHASE_ORDER) == len(Phase)
+
+
+class TestPhaseGuidanceCoverage:
+    """Verify _PHASE_GUIDANCE has entries for all 5 phases."""
+
+    def test_all_phases_have_guidance(self):
+        from oxpwn.agent.prompts import _PHASE_GUIDANCE
+
+        for phase in Phase:
+            assert phase in _PHASE_GUIDANCE, f"Missing guidance for {phase.value}"
+
+    def test_no_phase_falls_through_to_default(self):
+        from oxpwn.agent.prompts import _DEFAULT_GUIDANCE, _PHASE_GUIDANCE
+
+        for phase in Phase:
+            guidance = _PHASE_GUIDANCE.get(phase)
+            assert guidance is not None, f"Phase {phase.value} has no guidance entry"
+            assert guidance != _DEFAULT_GUIDANCE, f"Phase {phase.value} uses default guidance"
+
+    def test_exploitation_guidance_content(self):
+        from oxpwn.agent.prompts import _PHASE_GUIDANCE
+
+        guidance = _PHASE_GUIDANCE[Phase.exploitation]
+        assert "exploitation" in guidance.lower() or "exploit" in guidance.lower()
+
+    def test_validation_guidance_content(self):
+        from oxpwn.agent.prompts import _PHASE_GUIDANCE
+
+        guidance = _PHASE_GUIDANCE[Phase.validation]
+        assert "false positive" in guidance.lower() or "confirm" in guidance.lower()
+
+    def test_reporting_guidance_content(self):
+        from oxpwn.agent.prompts import _PHASE_GUIDANCE
+
+        guidance = _PHASE_GUIDANCE[Phase.reporting]
+        assert "summary" in guidance.lower() or "report" in guidance.lower()

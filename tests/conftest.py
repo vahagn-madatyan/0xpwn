@@ -407,3 +407,86 @@ def react_agent(llm_client, docker_sandbox):
     registry = ToolRegistry()
     register_default_tools(registry)
     return ReactAgent(llm_client, docker_sandbox, registry, max_iterations_per_phase=5)
+
+
+# ---------------------------------------------------------------------------
+# Juice Shop fixture (integration tests — end-to-end pipeline proof)
+# ---------------------------------------------------------------------------
+
+_JUICESHOP_IMAGE = "bkimminich/juice-shop:latest"
+_JUICESHOP_DEFAULT_PORT = 3000
+
+
+@pytest.fixture(scope="session")
+def juice_shop():
+    """Start OWASP Juice Shop in Docker for end-to-end integration tests.
+
+    * Pulls ``bkimminich/juice-shop:latest`` if not already present.
+    * Starts the container on port 3000 (override with ``OXPWN_JUICESHOP_PORT``).
+    * Waits up to 60 seconds for HTTP 200 on the root endpoint.
+    * Tears down the container after all tests complete.
+    * Skips if Docker is unreachable or the port is already in use.
+
+    Yields the target URL as ``http://host.docker.internal:<port>``.
+    """
+    import socket
+    import time
+
+    import docker as docker_lib
+
+    # Check Docker availability
+    try:
+        client = docker_lib.from_env()
+        client.ping()
+    except Exception:  # noqa: BLE001
+        pytest.skip("Docker daemon not reachable — skipping Juice Shop tests")
+
+    port = int(os.environ.get("OXPWN_JUICESHOP_PORT", _JUICESHOP_DEFAULT_PORT))
+
+    # Check if port is already in use
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        if sock.connect_ex(("127.0.0.1", port)) == 0:
+            pytest.skip(f"Port {port} already in use — skipping Juice Shop fixture")
+
+    # Pull image if needed
+    try:
+        client.images.get(_JUICESHOP_IMAGE)
+    except docker_lib.errors.ImageNotFound:
+        client.images.pull(_JUICESHOP_IMAGE)
+
+    container = client.containers.run(
+        _JUICESHOP_IMAGE,
+        detach=True,
+        ports={"3000/tcp": port},
+        labels={"oxpwn.managed": "true", "oxpwn.fixture": "juice-shop"},
+        remove=True,
+    )
+
+    target_url = f"http://host.docker.internal:{port}"
+
+    # Wait for readiness (HTTP 200 on root endpoint, up to 60s)
+    import urllib.request
+
+    ready = False
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        try:
+            resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2)  # noqa: S310
+            if resp.status == 200:
+                ready = True
+                break
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(1)
+
+    if not ready:
+        container.stop(timeout=5)
+        pytest.skip("Juice Shop did not become ready within 60s")
+
+    yield target_url
+
+    # Teardown
+    try:
+        container.stop(timeout=10)
+    except Exception:  # noqa: BLE001
+        pass  # container may already be stopped (remove=True)

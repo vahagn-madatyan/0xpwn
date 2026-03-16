@@ -26,8 +26,14 @@ from oxpwn.sandbox.docker import DockerSandbox
 
 logger = structlog.get_logger("oxpwn.agent")
 
-# Phases the agent iterates through (S03 scope: recon + scanning only)
-_PHASE_ORDER: list[Phase] = [Phase.recon, Phase.scanning]
+# Phases the agent iterates through (S08: full 5-phase pipeline)
+_PHASE_ORDER: list[Phase] = [
+    Phase.recon,
+    Phase.scanning,
+    Phase.exploitation,
+    Phase.validation,
+    Phase.reporting,
+]
 
 # Max chars of tool output to feed back to the LLM
 _MAX_TOOL_OUTPUT_CHARS = 4000

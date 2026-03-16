@@ -1,9 +1,9 @@
 # GSD State
 
 **Active Milestone:** M001 — Core Engine
-**Active Slice:** S08 — End-to-End Validation
-**Phase:** planning
-**Requirements Status:** 23 active · 1 validated · 9 deferred · 4 out of scope
+**Active Slice:** None
+**Phase:** completing-milestone
+**Requirements Status:** 21 active · 3 validated · 9 deferred · 4 out of scope
 
 ## Milestone Registry
 - 🔄 **M001:** Core Engine
@@ -15,4 +15,4 @@
 - None
 
 ## Next Action
-Plan slice S08 (End-to-End Validation).
+All slices complete in M001. Write milestone summary.

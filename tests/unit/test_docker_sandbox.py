@@ -86,6 +86,7 @@ class TestCreate:
             cap_add=["NET_ADMIN", "NET_RAW"],
             labels={"oxpwn.managed": "true", "oxpwn.scan_id": SCAN_ID},
             network_mode="bridge",
+            extra_hosts={"host.docker.internal": "host-gateway"},
         )
         container.start.assert_called_once()
 

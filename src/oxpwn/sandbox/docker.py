@@ -47,10 +47,12 @@ class DockerSandbox:
         scan_id: str,
         *,
         network_mode: str = "bridge",
+        extra_hosts: dict[str, str] | None = None,
     ) -> None:
         self.image = image
         self.scan_id = scan_id
         self.network_mode = network_mode
+        self.extra_hosts = extra_hosts or {"host.docker.internal": "host-gateway"}
         self.labels = {
             "oxpwn.managed": "true",
             "oxpwn.scan_id": scan_id,
@@ -87,6 +89,7 @@ class DockerSandbox:
                 cap_add=["NET_ADMIN", "NET_RAW"],
                 labels=self.labels,
                 network_mode=self.network_mode,
+                extra_hosts=self.extra_hosts,
             )
             container.start()
             return container

@@ -4,17 +4,6 @@ This file is the explicit capability and coverage contract for 0xpwn.
 
 ## Active
 
-### R001 — Autonomous 5-phase pentesting pipeline
-- Class: core-capability
-- Status: active
-- Description: Agent executes Recon → Scanning → Exploitation → Validation → Reporting phases autonomously with a ReAct reasoning loop
-- Why it matters: This is the core product — without autonomous multi-phase execution, it's just a tool wrapper
-- Source: user
-- Primary owning slice: M001/S03
-- Supporting slices: M001/S04, M001/S08
-- Validation: unmapped
-- Notes: Must handle phase transitions, state accumulation, and re-planning on failure
-
 ### R003 — Provider-agnostic LLM support (100+ via LiteLLM)
 - Class: core-capability
 - Status: active
@@ -25,17 +14,6 @@ This file is the explicit capability and coverage contract for 0xpwn.
 - Supporting slices: M001/S06
 - Validation: unmapped
 - Notes: Cost tracking via LiteLLM's completion_cost(), async via acompletion()
-
-### R004 — Real-time agent reasoning stream
-- Class: primary-user-loop
-- Status: active
-- Description: Agent's thinking, tool selection, raw tool output, and parsed results stream to terminal in real-time with visible phase transitions
-- Why it matters: Bug bounty hunters identified "watching the AI operate" as the key selling moment — transparency builds trust and is the hook
-- Source: user
-- Primary owning slice: M001/S05
-- Supporting slices: M001/S08
-- Validation: unmapped
-- Notes: Rich-based terminal output with color-coded phases, thinking blocks, and tool results
 
 ### R005 — First-run guided model setup wizard
 - Class: launchability
@@ -259,6 +237,17 @@ This file is the explicit capability and coverage contract for 0xpwn.
 
 ## Validated
 
+### R001 — Autonomous 5-phase pentesting pipeline
+- Class: core-capability
+- Status: validated
+- Description: Agent executes Recon → Scanning → Exploitation → Validation → Reporting phases autonomously with a ReAct reasoning loop
+- Why it matters: This is the core product — without autonomous multi-phase execution, it's just a tool wrapper
+- Source: user
+- Primary owning slice: M001/S03
+- Supporting slices: M001/S04, M001/S08
+- Validation: Validated by S08 — `_PHASE_ORDER` contains all 5 phases, `_PHASE_GUIDANCE` covers all 5, enrichment wired in `_scan_async()`, 261 unit tests including 7 S08 wiring tests, integration test with structural assertions (≥3 phases completed, non-empty tool results, findings list). Human UAT documented in acceptance checklist.
+- Notes: Must handle phase transitions, state accumulation, and re-planning on failure
+
 ### R002 — Isolated Docker/Kali sandbox execution
 - Class: core-capability
 - Status: validated
@@ -269,6 +258,17 @@ This file is the explicit capability and coverage contract for 0xpwn.
 - Supporting slices: M001/S08
 - Validation: Validated by `pytest tests/integration/test_sandbox_integration.py::test_nmap_executor_real_scan tests/integration/test_tool_suite_integration.py -m integration -v` plus the S04 sandbox image verification command proving `nmap`, `httpx`, `subfinder`, `nuclei`, `ffuf`, and `python3` inside the custom Kali image
 - Notes: Container gets NET_ADMIN/NET_RAW capabilities, published to ghcr.io/0xpwn/sandbox
+
+### R004 — Real-time agent reasoning stream
+- Class: primary-user-loop
+- Status: validated
+- Description: Agent's thinking, tool selection, raw tool output, and parsed results stream to terminal in real-time with visible phase transitions
+- Why it matters: Bug bounty hunters identified "watching the AI operate" as the key selling moment — transparency builds trust and is the hook
+- Source: user
+- Primary owning slice: M001/S05
+- Supporting slices: M001/S08
+- Validation: Validated by S05 (64 unit tests + 2 integration tests proving streaming renders reasoning, tool output, and phase transitions) extended by S08 to cover full 5-phase pipeline with all-phase guidance prompts. Human UAT documented in S08 acceptance checklist for streaming quality verification.
+- Notes: Rich-based terminal output with color-coded phases, thinking blocks, and tool results
 
 ## Deferred
 
@@ -421,10 +421,10 @@ This file is the explicit capability and coverage contract for 0xpwn.
 
 | ID | Class | Status | Primary owner | Supporting | Proof |
 |---|---|---|---|---|---|
-| R001 | core-capability | active | M001/S03 | M001/S04, M001/S08 | unmapped |
+| R001 | core-capability | validated | M001/S03 | M001/S04, M001/S08 | 261 unit tests (7 S08 wiring tests), integration test with structural assertions, all 5 phases + guidance + enrichment wired |
 | R002 | core-capability | validated | M001/S02 | M001/S08 | `test_nmap_executor_real_scan` + `test_tool_suite_integration.py` real Docker verification |
 | R003 | core-capability | active | M001/S01 | M001/S06 | unmapped |
-| R004 | primary-user-loop | active | M001/S05 | M001/S08 | S05: 64 unit tests + 2 integration tests + terminal smoke run prove streaming CLI renders reasoning, tool output, and phase transitions incrementally; full five-phase validation deferred to S08 |
+| R004 | primary-user-loop | validated | M001/S05 | M001/S08 | S05: 64 unit tests + 2 integration tests; S08: 5-phase pipeline with all-phase guidance, streaming quality UAT documented |
 | R005 | launchability | validated | M001/S06 | none | 56 unit tests (config model, wizard flows, CLI integration, config subcommands) |
 | R006 | differentiator | validated | M001/S07 | none | 60 unit tests proving NVD client, CVE cache, finding extraction, enrichment orchestrator |
 | R007 | compliance/security | active | M002/S01 | none | unmapped |
@@ -461,7 +461,7 @@ This file is the explicit capability and coverage contract for 0xpwn.
 
 ## Coverage Summary
 
-- Active requirements: 21
+- Active requirements: 19
 - Mapped to slices: 24
-- Validated: 3
+- Validated: 5
 - Unmapped active requirements: 0

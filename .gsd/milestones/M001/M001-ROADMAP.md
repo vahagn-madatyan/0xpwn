@@ -73,7 +73,7 @@ This milestone is complete only when all are true:
 - [x] **S07: CVE Enrichment + Finding Quality** `risk:medium` `depends:[S04]`
   > After this: Findings include CVE IDs, CVSS scores, CWE classification, and remediation guidance from NVD API with local caching — proven by enriching real scan findings
 
-- [ ] **S08: End-to-End Validation** `risk:low` `depends:[S01,S02,S03,S04,S05,S06,S07]`
+- [x] **S08: End-to-End Validation** `risk:low` `depends:[S01,S02,S03,S04,S05,S06,S07]`
   > After this: Full scan against OWASP Juice Shop runs all 5 phases, finds real vulnerabilities with PoC evidence, streams reasoning in real-time, and produces enriched findings — proving the complete M001 outcome
 
 ## Boundary Map
