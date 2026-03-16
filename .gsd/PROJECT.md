@@ -10,16 +10,11 @@ A bug bounty hunter runs `0xpwn scan --target <url>` and watches an AI agent sys
 
 ## Current State
 
-- S01 complete: Python package scaffolded, Pydantic models defined, async LLM client proven
-- S02 complete: Docker sandbox with Kali image, nmap tool execution + XML parser, clean container lifecycle
-- S03 complete: ReAct agent loop with tool registry, phase-aware prompts, event protocol, autonomous Recon→Scanning proven with real LLM + Docker
-- S04 complete: Full five-tool core suite (`nmap`, `httpx`, `subfinder`, `nuclei`, `ffuf`) registered for the agent with compact parsers and real Docker proofs
-- S05 complete: `0xpwn scan --target <url>` streams agent reasoning, phase transitions, raw tool output, and parsed results in real-time with Rich formatting
-- S06 complete: First-run wizard detects Ollama, guides API key setup, validates LLM connectivity, persists config to YAML; `0xpwn config show/reset/wizard` subcommands; config feeds into scan command
-- S07 complete: NVD-backed CVE enrichment pipeline — NVD client with rate limiting, SQLite cache with WAL mode, finding extraction from nuclei/ffuf/nmap, batch enrichment with CVSS/CWE/remediation population
-- S08 complete: Full 5-phase pipeline wired end-to-end — all phases have guidance, enrichment runs post-loop, Docker extra_hosts for host-network reachability, Juice Shop integration test, acceptance checklist
-- **M001 Core Engine complete** — all 8 slices done, 261 unit tests passing, 5 requirements validated (R001, R002, R004, R005, R006)
-- `pip install -e .` works, `0xpwn --help` responds, `0xpwn scan --target` executes full 5-phase async scan pipeline with enrichment
+- **M001 Core Engine complete** (2026-03-15) — all 8 slices done, 261 unit tests passing
+- 5 requirements validated: R001 (5-phase pipeline), R002 (Docker sandbox), R004 (streaming), R005 (wizard), R006 (CVE enrichment)
+- `pip install -e .` works, `0xpwn --help` responds, `0xpwn scan --target` executes full 5-phase async scan pipeline
+- Full subsystem inventory: agent loop, Docker/Kali sandbox (5 tools), LLM client (LiteLLM), streaming CLI (Rich), first-run wizard, NVD CVE enrichment
+- 31 source files across 7 subpackages: core/, agent/, cli/, config/, enrichment/, llm/, sandbox/
 - Next: M002 (Safety + Persistence) — permissions, budget controls, scope enforcement, SQLite, audit log
 
 ## Architecture / Key Patterns
@@ -29,12 +24,13 @@ A bug bounty hunter runs `0xpwn scan --target <url>` and watches an AI agent sys
 - **Sandbox:** Docker container running custom Kali image (ghcr.io/0xpwn/sandbox) with NET_ADMIN/NET_RAW capabilities. Async context manager with labeled lifecycle and orphan cleanup plus deterministic in-container HTTP proof fixtures for tool-suite integration.
 - **Tool executors:** `NmapExecutor`, `HttpxExecutor`, `SubfinderExecutor`, `NucleiExecutor`, and `FfufExecutor` share the same pattern — constructor takes `DockerSandbox`, async `run()` returns `ToolResult` with compact `parsed_output`.
 - **Event protocol:** Typed dataclasses (ReasoningEvent, ToolCallEvent, ToolResultEvent, ToolOutputChunkEvent, PhaseTransitionEvent, ErrorEvent) + AgentEventCallback Protocol. RichStreamingCallback renders append-only Rich output in the CLI.
-- **CLI entrypoint:** `0xpwn scan --target <url>` composes ScanState, ToolRegistry, DockerSandbox, LLMClient, and ReactAgent through `asyncio.run(_scan_async(...))`. Runtime config is env/option-backed pre-wizard.
+- **CLI entrypoint:** `0xpwn scan --target <url>` composes ScanState, ToolRegistry, DockerSandbox, LLMClient, and ReactAgent through `asyncio.run(_scan_async(...))`. Config resolves via CLI > env > YAML > wizard trigger.
 - **LLM layer:** LiteLLM for provider-agnostic access to 100+ models including Ollama for local
 - **CLI:** Typer + Rich for streaming output, Textual for interactive TUI (M004)
 - **State:** Pydantic models, SQLite persistence (M002), event-sourced audit log
+- **Config:** YAML-based with XDG path conventions, first-run guided wizard for model setup, `0xpwn config show/reset/wizard`
+- **Enrichment:** NVD CVE 2.0 API client with rate limiting, SQLite cache (WAL mode, 7-day TTL), batch enrichment populating CVSS/CWE/remediation on findings
 - **Package:** `oxpwn` Python package, `0xpwn` CLI entrypoint
-- **Config:** YAML-based, first-run guided wizard for model setup
 
 ## Capability Contract
 
