@@ -50,13 +50,13 @@ This file is the explicit capability and coverage contract for 0xpwn.
 
 ### R006 — CVE/NVD enrichment for findings
 - Class: differentiator
-- Status: active
+- Status: validated
 - Description: Findings are enriched with CVE IDs, CVSS scores, CWE classification, and remediation guidance from NVD
 - Why it matters: Raw tool output isn't enough for bug bounty reports — enriched findings save report-writing time
 - Source: user
 - Primary owning slice: M001/S07
 - Supporting slices: none
-- Validation: unmapped
+- Validation: Validated by 60 unit tests (`test_nvd_client.py` 23 + `test_cve_cache.py` 16 + `test_enrichment.py` 21) proving NVD client fetch/rate-limit/error-handling, SQLite cache put/get/TTL-expiry/WAL-mode, CVE ID extraction from nuclei/nmap/plain-text, finding extraction from nuclei/ffuf/nmap tool results, enrichment populating cvss/cwe_id/cve_id/remediation fields, CVSS v3.1→v3.0→v2 fallback chain, CWE placeholder filtering, batch deduplication, cache hit optimization, and graceful degradation on NVD errors. Live NVD integration deferred to S08.
 - Notes: NVD API (api.nvd.nist.gov) is free but rate-limited; cache responses locally
 
 ### R007 — Tiered permission model (auto/prompt/always-ask)
@@ -426,7 +426,7 @@ This file is the explicit capability and coverage contract for 0xpwn.
 | R003 | core-capability | active | M001/S01 | M001/S06 | unmapped |
 | R004 | primary-user-loop | active | M001/S05 | M001/S08 | S05: 64 unit tests + 2 integration tests + terminal smoke run prove streaming CLI renders reasoning, tool output, and phase transitions incrementally; full five-phase validation deferred to S08 |
 | R005 | launchability | validated | M001/S06 | none | 56 unit tests (config model, wizard flows, CLI integration, config subcommands) |
-| R006 | differentiator | active | M001/S07 | none | unmapped |
+| R006 | differentiator | validated | M001/S07 | none | 60 unit tests proving NVD client, CVE cache, finding extraction, enrichment orchestrator |
 | R007 | compliance/security | active | M002/S01 | none | unmapped |
 | R008 | differentiator | active | M002/S02 | none | unmapped |
 | R009 | compliance/security | active | M002/S03 | none | unmapped |
@@ -461,7 +461,7 @@ This file is the explicit capability and coverage contract for 0xpwn.
 
 ## Coverage Summary
 
-- Active requirements: 22
+- Active requirements: 21
 - Mapped to slices: 24
-- Validated: 2
+- Validated: 3
 - Unmapped active requirements: 0
