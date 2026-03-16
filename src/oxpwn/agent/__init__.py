@@ -7,6 +7,7 @@ from oxpwn.agent.events import (
     PhaseTransitionEvent,
     ReasoningEvent,
     ToolCallEvent,
+    ToolOutputChunkEvent,
     ToolResultEvent,
 )
 from oxpwn.agent.exceptions import AgentError, AgentMaxIterationsError
@@ -23,6 +24,7 @@ __all__ = [
     "ReactAgent",
     "ReasoningEvent",
     "ToolCallEvent",
+    "ToolOutputChunkEvent",
     "ToolRegistry",
     "ToolResultEvent",
 ]

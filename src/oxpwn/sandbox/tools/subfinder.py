@@ -17,7 +17,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from oxpwn.core.models import ToolResult
-from oxpwn.sandbox.docker import DockerSandbox
+from oxpwn.sandbox.docker import DockerSandbox, SandboxOutputSink
 
 logger = structlog.get_logger()
 
@@ -109,6 +109,7 @@ class SubfinderExecutor:
         recursive: bool = False,
         timeout_seconds: int = 30,
         max_time_minutes: int = 10,
+        output_sink: SandboxOutputSink | None = None,
     ) -> ToolResult:
         """Execute subfinder and return a :class:`ToolResult` with parsed JSONL."""
 
@@ -121,7 +122,11 @@ class SubfinderExecutor:
             max_time_minutes=max_time_minutes,
         )
 
-        result = await self.sandbox.execute(command)
+        result = (
+            await self.sandbox.execute_stream(command, output_sink=output_sink)
+            if output_sink is not None
+            else await self.sandbox.execute(command)
+        )
         result.tool_name = "subfinder"
 
         try:

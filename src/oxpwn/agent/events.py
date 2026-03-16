@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol, Union
+from typing import Any, Literal, Protocol, Union
+
+
+ToolOutputStream = Literal["stdout", "stderr"]
 
 
 # ---------------------------------------------------------------------------
@@ -13,7 +16,7 @@ from typing import Any, Protocol, Union
 
 @dataclass(frozen=True)
 class ReasoningEvent:
-    """LLM produced reasoning text (no tool call)."""
+    """LLM produced reasoning text for the current turn."""
 
     content: str
     phase: str
@@ -26,6 +29,17 @@ class ToolCallEvent:
 
     tool_name: str
     arguments: dict[str, Any]
+    phase: str
+    iteration: int
+
+
+@dataclass(frozen=True)
+class ToolOutputChunkEvent:
+    """A raw stdout/stderr chunk streamed from a running tool."""
+
+    tool_name: str
+    stream: ToolOutputStream
+    chunk: str
     phase: str
     iteration: int
 
@@ -62,6 +76,7 @@ class ErrorEvent:
 AgentEvent = Union[
     ReasoningEvent,
     ToolCallEvent,
+    ToolOutputChunkEvent,
     ToolResultEvent,
     PhaseTransitionEvent,
     ErrorEvent,

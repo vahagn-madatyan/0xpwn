@@ -19,7 +19,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from oxpwn.core.models import ToolResult
-from oxpwn.sandbox.docker import DockerSandbox
+from oxpwn.sandbox.docker import DockerSandbox, SandboxOutputSink
 
 logger = structlog.get_logger()
 
@@ -154,6 +154,7 @@ class FfufExecutor:
         match_status: str = "all",
         timeout_seconds: int = 10,
         threads: int | None = None,
+        output_sink: SandboxOutputSink | None = None,
     ) -> ToolResult:
         """Execute ffuf and return a :class:`ToolResult` with parsed JSON."""
 
@@ -166,7 +167,11 @@ class FfufExecutor:
             threads=threads,
         )
 
-        result = await self.sandbox.execute(command)
+        result = (
+            await self.sandbox.execute_stream(command, output_sink=output_sink)
+            if output_sink is not None
+            else await self.sandbox.execute(command)
+        )
         result.tool_name = "ffuf"
 
         try:

@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 import structlog
 
 from oxpwn.core.models import ToolResult
-from oxpwn.sandbox.docker import DockerSandbox
+from oxpwn.sandbox.docker import DockerSandbox, SandboxOutputSink
 
 logger = structlog.get_logger()
 
@@ -152,6 +152,8 @@ class NmapExecutor:
         target: str,
         ports: str | None = None,
         flags: str = "-sV",
+        *,
+        output_sink: SandboxOutputSink | None = None,
     ) -> ToolResult:
         """Execute nmap and return a :class:`ToolResult` with parsed XML.
 
@@ -171,7 +173,11 @@ class NmapExecutor:
         parts.append(target)
         command = " ".join(parts)
 
-        result = await self.sandbox.execute(command)
+        result = (
+            await self.sandbox.execute_stream(command, output_sink=output_sink)
+            if output_sink is not None
+            else await self.sandbox.execute(command)
+        )
 
         # Enrich with tool name
         result.tool_name = "nmap"

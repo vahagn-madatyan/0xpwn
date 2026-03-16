@@ -13,11 +13,13 @@ from oxpwn.agent.events import (
     PhaseTransitionEvent,
     ReasoningEvent,
     ToolCallEvent,
+    ToolOutputChunkEvent,
+    ToolOutputStream,
     ToolResultEvent,
 )
 from oxpwn.agent.exceptions import AgentMaxIterationsError
 from oxpwn.agent.prompts import build_phase_summary, build_system_prompt
-from oxpwn.agent.tools import ToolRegistry, parse_tool_arguments
+from oxpwn.agent.tools import ToolOutputSink, ToolRegistry, parse_tool_arguments
 from oxpwn.core.models import Phase, ScanState
 from oxpwn.llm.client import LLMClient
 from oxpwn.sandbox.docker import DockerSandbox
@@ -134,25 +136,28 @@ class ReactAgent:
                 has_tool_calls=has_tool_calls,
             )
 
-            if not has_tool_calls:
-                # No tool calls = phase complete
-                if response.content:
-                    await self._emit(ReasoningEvent(
+            if response.content:
+                await self._emit(
+                    ReasoningEvent(
                         content=response.content,
                         phase=phase.value,
                         iteration=iteration,
-                    ))
+                    )
+                )
 
-                # Build phase summary for context compression
+            if not has_tool_calls:
+                # No tool calls = phase complete
                 findings_dicts = [f.model_dump() for f in scan_state.findings]
                 summary = build_phase_summary(phase, phase_tool_results, findings_dicts)
 
                 next_phase_name = self._next_phase_name(phase)
-                await self._emit(PhaseTransitionEvent(
-                    from_phase=phase.value,
-                    to_phase=next_phase_name,
-                    summary=summary,
-                ))
+                await self._emit(
+                    PhaseTransitionEvent(
+                        from_phase=phase.value,
+                        to_phase=next_phase_name,
+                        summary=summary,
+                    )
+                )
 
                 logger.info(
                     "agent.phase_transition",
@@ -175,16 +180,25 @@ class ReactAgent:
 
                 arguments = parse_tool_arguments(raw_args)
 
-                await self._emit(ToolCallEvent(
-                    tool_name=tool_name,
-                    arguments=arguments,
-                    phase=phase.value,
-                    iteration=iteration,
-                ))
+                await self._emit(
+                    ToolCallEvent(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        phase=phase.value,
+                        iteration=iteration,
+                    )
+                )
 
                 try:
                     result = await self._registry.dispatch(
-                        tool_name, arguments, self._sandbox,
+                        tool_name,
+                        arguments,
+                        self._sandbox,
+                        output_sink=self._build_tool_output_sink(
+                            tool_name=tool_name,
+                            phase=phase.value,
+                            iteration=iteration,
+                        ),
                     )
 
                     scan_state.add_tool_result(result)
@@ -199,13 +213,15 @@ class ReactAgent:
                         duration_ms=result.duration_ms,
                     )
 
-                    await self._emit(ToolResultEvent(
-                        tool_name=tool_name,
-                        result_summary=tool_output[:200],
-                        duration_ms=result.duration_ms,
-                        phase=phase.value,
-                        iteration=iteration,
-                    ))
+                    await self._emit(
+                        ToolResultEvent(
+                            tool_name=tool_name,
+                            result_summary=tool_output[:200],
+                            duration_ms=result.duration_ms,
+                            phase=phase.value,
+                            iteration=iteration,
+                        )
+                    )
 
                 except KeyError:
                     error_msg = f"Unknown tool: {tool_name!r}"
@@ -215,11 +231,13 @@ class ReactAgent:
                         tool_name=tool_name,
                         error=error_msg,
                     )
-                    await self._emit(ErrorEvent(
-                        error=error_msg,
-                        phase=phase.value,
-                        iteration=iteration,
-                    ))
+                    await self._emit(
+                        ErrorEvent(
+                            error=error_msg,
+                            phase=phase.value,
+                            iteration=iteration,
+                        )
+                    )
 
                 except Exception as exc:
                     error_msg = f"Tool execution failed: {exc}"
@@ -229,19 +247,23 @@ class ReactAgent:
                         tool_name=tool_name,
                         error=str(exc),
                     )
-                    await self._emit(ErrorEvent(
-                        error=error_msg,
-                        phase=phase.value,
-                        iteration=iteration,
-                    ))
+                    await self._emit(
+                        ErrorEvent(
+                            error=error_msg,
+                            phase=phase.value,
+                            iteration=iteration,
+                        )
+                    )
 
                 # Append tool result message with matching tool_call_id
-                conversation.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "name": tool_name,
-                    "content": tool_output,
-                })
+                conversation.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "name": tool_name,
+                        "content": tool_output,
+                    }
+                )
 
         # Exhausted iteration budget
         raise AgentMaxIterationsError(
@@ -282,6 +304,28 @@ class ReactAgent:
         except ValueError:
             pass
         return "complete"
+
+    def _build_tool_output_sink(
+        self,
+        *,
+        tool_name: str,
+        phase: str,
+        iteration: int,
+    ) -> ToolOutputSink:
+        async def _sink(*, chunk: str, stream: ToolOutputStream) -> None:
+            if not chunk:
+                return
+            await self._emit(
+                ToolOutputChunkEvent(
+                    tool_name=tool_name,
+                    stream=stream,
+                    chunk=chunk,
+                    phase=phase,
+                    iteration=iteration,
+                )
+            )
+
+        return _sink
 
     async def _emit(self, event: Any) -> None:
         """Emit an event through the callback, if one is set. Never blocks."""

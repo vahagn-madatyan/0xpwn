@@ -14,6 +14,7 @@ from oxpwn.agent.events import (
     PhaseTransitionEvent,
     ReasoningEvent,
     ToolCallEvent,
+    ToolOutputChunkEvent,
     ToolResultEvent,
 )
 from oxpwn.agent.exceptions import AgentMaxIterationsError
@@ -107,6 +108,45 @@ def _make_registry() -> ToolRegistry:
     return registry
 
 
+def _make_streaming_registry() -> ToolRegistry:
+    """Registry with a mock nmap tool that emits live stdout/stderr chunks."""
+    registry = ToolRegistry()
+
+    class MockStreamingNmapExecutor:
+        def __init__(self, sandbox):
+            self.sandbox = sandbox
+
+        async def run(
+            self,
+            target: str,
+            ports: str | None = None,
+            flags: str = "-sV",
+            *,
+            output_sink=None,
+        ) -> ToolResult:
+            if output_sink is not None:
+                await output_sink(chunk="chunk stdout", stream="stdout")
+                await output_sink(chunk="chunk stderr", stream="stderr")
+
+            return _tool_result(
+                command=f"nmap {flags} {target}",
+                stdout="chunk stdout",
+                stderr="chunk stderr",
+            )
+
+    registry.register(
+        name="nmap",
+        description="Run nmap scan.",
+        parameters_schema={
+            "type": "object",
+            "properties": {"target": {"type": "string"}},
+            "required": ["target"],
+        },
+        executor_factory=lambda s: MockStreamingNmapExecutor(s),
+    )
+    return registry
+
+
 def _make_httpx_registry() -> ToolRegistry:
     """Registry with a mock httpx tool for parsed_output contract tests."""
     registry = ToolRegistry()
@@ -161,7 +201,7 @@ class EventCollector:
     async def on_event(self, event: AgentEvent) -> None:
         self.events.append(event)
 
-    def of_type(self, cls: type) -> list:
+    def of_type(self, cls: type[Any]) -> list[Any]:
         return [e for e in self.events if isinstance(e, cls)]
 
 
@@ -399,21 +439,38 @@ class TestEventCallbacks:
         sandbox = MagicMock()
         collector = EventCollector()
         agent = ReactAgent(
-            llm, sandbox, _make_registry(),
+            llm,
+            sandbox,
+            _make_streaming_registry(),
             max_iterations_per_phase=5,
             event_callback=collector,
         )
         await agent.run(_make_scan_state())
 
-        # Should have: ToolCallEvent, ToolResultEvent, ReasoningEvent, PhaseTransition, ...
+        reasoning_events = collector.of_type(ReasoningEvent)
+        chunk_events = collector.of_type(ToolOutputChunkEvent)
+
+        assert len(reasoning_events) == 3
+        assert reasoning_events[0].content == "Running nmap."
         assert len(collector.of_type(ToolCallEvent)) >= 1
         assert len(collector.of_type(ToolResultEvent)) >= 1
         assert len(collector.of_type(PhaseTransitionEvent)) >= 1
+        assert [(event.stream, event.chunk) for event in chunk_events] == [
+            ("stdout", "chunk stdout"),
+            ("stderr", "chunk stderr"),
+        ]
+        assert all(event.tool_name == "nmap" for event in chunk_events)
+        assert all(event.phase == "recon" for event in chunk_events)
+        assert all(event.iteration == 1 for event in chunk_events)
 
-        # ToolCall comes before ToolResult
-        tc_idx = next(i for i, e in enumerate(collector.events) if isinstance(e, ToolCallEvent))
-        tr_idx = next(i for i, e in enumerate(collector.events) if isinstance(e, ToolResultEvent))
-        assert tc_idx < tr_idx
+        # First tool-turn ordering is deterministic: reasoning -> dispatch -> streamed chunks -> result.
+        assert [type(event) for event in collector.events[:5]] == [
+            ReasoningEvent,
+            ToolCallEvent,
+            ToolOutputChunkEvent,
+            ToolOutputChunkEvent,
+            ToolResultEvent,
+        ]
 
     @pytest.mark.asyncio
     async def test_no_callback_does_not_crash(self):

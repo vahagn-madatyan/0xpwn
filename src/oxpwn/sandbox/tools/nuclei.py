@@ -17,7 +17,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from oxpwn.core.models import ToolResult
-from oxpwn.sandbox.docker import DockerSandbox
+from oxpwn.sandbox.docker import DockerSandbox, SandboxOutputSink
 
 logger = structlog.get_logger()
 
@@ -135,6 +135,7 @@ class NucleiExecutor:
         timeout_seconds: int = 10,
         retries: int = 1,
         rate_limit: int | None = None,
+        output_sink: SandboxOutputSink | None = None,
     ) -> ToolResult:
         """Execute nuclei and return a :class:`ToolResult` with parsed JSONL."""
 
@@ -149,7 +150,11 @@ class NucleiExecutor:
             rate_limit=rate_limit,
         )
 
-        result = await self.sandbox.execute(command)
+        result = (
+            await self.sandbox.execute_stream(command, output_sink=output_sink)
+            if output_sink is not None
+            else await self.sandbox.execute(command)
+        )
         result.tool_name = "nuclei"
 
         try:

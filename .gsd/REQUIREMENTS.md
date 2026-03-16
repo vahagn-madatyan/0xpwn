@@ -424,7 +424,7 @@ This file is the explicit capability and coverage contract for 0xpwn.
 | R001 | core-capability | active | M001/S03 | M001/S04, M001/S08 | unmapped |
 | R002 | core-capability | validated | M001/S02 | M001/S08 | `test_nmap_executor_real_scan` + `test_tool_suite_integration.py` real Docker verification |
 | R003 | core-capability | active | M001/S01 | M001/S06 | unmapped |
-| R004 | primary-user-loop | active | M001/S05 | M001/S08 | unmapped |
+| R004 | primary-user-loop | active | M001/S05 | M001/S08 | S05: 64 unit tests + 2 integration tests + terminal smoke run prove streaming CLI renders reasoning, tool output, and phase transitions incrementally; full five-phase validation deferred to S08 |
 | R005 | launchability | active | M001/S06 | none | unmapped |
 | R006 | differentiator | active | M001/S07 | none | unmapped |
 | R007 | compliance/security | active | M002/S01 | none | unmapped |

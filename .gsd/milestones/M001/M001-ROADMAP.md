@@ -64,7 +64,7 @@ This milestone is complete only when all are true:
 - [x] **S04: Tool Suite Integration** `risk:medium` `depends:[S02,S03]`
   > After this: Agent uses all 5 core tools (nmap, httpx, subfinder, nuclei, ffuf) with structured Pydantic output parsers, each tool proven against real targets inside the sandbox
 
-- [ ] **S05: Streaming CLI + Real-time Output** `risk:medium` `depends:[S03]`
+- [x] **S05: Streaming CLI + Real-time Output** `risk:medium` `depends:[S03]`
   > After this: `0xpwn scan --target <url>` CLI command exists, agent reasoning and tool output stream in real-time with Rich formatting and color-coded phase transitions — proven by running a scan from the terminal
 
 - [ ] **S06: First-Run Wizard + Config** `risk:low` `depends:[S01,S05]`

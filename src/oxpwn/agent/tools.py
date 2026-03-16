@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import inspect
 import json
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 import structlog
 
+from oxpwn.agent.events import ToolOutputStream
 from oxpwn.core.models import ToolResult
 from oxpwn.sandbox.docker import DockerSandbox
 from oxpwn.sandbox.tools.ffuf import DEFAULT_FFUF_WORDLIST_PATH
@@ -16,6 +18,12 @@ logger = structlog.get_logger("oxpwn.agent.tools")
 
 # Type alias: factory takes a sandbox and returns an executor instance
 ExecutorFactory = Callable[[DockerSandbox], Any]
+
+
+class ToolOutputSink(Protocol):
+    """Optional callback used by executors to forward live stdout/stderr chunks."""
+
+    def __call__(self, *, chunk: str, stream: ToolOutputStream) -> Any: ...  # pragma: no cover
 
 
 class ToolRegistry:
@@ -78,6 +86,8 @@ class ToolRegistry:
         name: str,
         arguments: dict[str, Any],
         sandbox: DockerSandbox,
+        *,
+        output_sink: ToolOutputSink | None = None,
     ) -> ToolResult:
         """Instantiate the executor via its factory and run the tool.
 
@@ -85,6 +95,7 @@ class ToolRegistry:
             name: Registered tool name.
             arguments: Parsed arguments to pass to ``executor.run()``.
             sandbox: Docker sandbox for command execution.
+            output_sink: Optional callback for live stdout/stderr chunks.
 
         Returns:
             ToolResult from the executor.
@@ -97,7 +108,12 @@ class ToolRegistry:
 
         entry = self._tools[name]
         executor = entry.executor_factory(sandbox)
-        result: ToolResult = await executor.run(**arguments)
+
+        run_kwargs = dict(arguments)
+        if output_sink is not None and _executor_accepts_output_sink(executor):
+            run_kwargs["output_sink"] = output_sink
+
+        result: ToolResult = await executor.run(**run_kwargs)
         return result
 
     @property
@@ -378,3 +394,19 @@ def parse_tool_arguments(raw_arguments: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         logger.warning("tool.arguments_parse_error", error=str(exc), raw=raw_arguments[:200])
         return {}
+
+
+def _executor_accepts_output_sink(executor: Any) -> bool:
+    """Return whether ``executor.run`` supports the additive ``output_sink`` kwarg."""
+    try:
+        run_signature = inspect.signature(executor.run)
+    except (TypeError, ValueError):
+        return False
+
+    if "output_sink" in run_signature.parameters:
+        return True
+
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in run_signature.parameters.values()
+    )

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
+import inspect
 import time
-from typing import Self
+from typing import Literal, Protocol, Self
 
 import docker
 import docker.errors
@@ -17,6 +19,15 @@ from oxpwn.sandbox.exceptions import (
     SandboxNotRunningError,
     SandboxTimeoutError,
 )
+
+ToolOutputStream = Literal["stdout", "stderr"]
+
+
+class SandboxOutputSink(Protocol):
+    """Optional callback for forwarding decoded stdout/stderr chunks live."""
+
+    def __call__(self, *, chunk: str, stream: ToolOutputStream) -> object: ...  # pragma: no cover
+
 
 logger = structlog.get_logger()
 
@@ -112,31 +123,11 @@ class DockerSandbox:
             SandboxNotRunningError: Container is not running.
             SandboxTimeoutError: Command exceeded timeout.
         """
-        if self._container is None:
-            raise SandboxNotRunningError(
-                "No container available — call create() first"
-            )
-
-        container_id = self._container.short_id
-
-        # Refresh status to verify container is running
-        def _reload_status() -> str:
-            assert self._container is not None  # noqa: S101
-            self._container.reload()
-            return self._container.status
-
-        status = await asyncio.to_thread(_reload_status)
-        if status != "running":
-            raise SandboxNotRunningError(
-                f"Container {container_id} is not running (status={status})",
-                container_id=container_id,
-            )
+        container_id = await self._require_running_container()
 
         def _exec() -> tuple[int, bytes | None, bytes | None]:
             assert self._container is not None  # noqa: S101
-            exit_code, (out, err) = self._container.exec_run(
-                command, demux=True
-            )
+            exit_code, (out, err) = self._container.exec_run(command, demux=True)
             return exit_code, out, err
 
         t0 = time.monotonic()
@@ -153,8 +144,8 @@ class DockerSandbox:
             ) from exc
 
         duration_ms = int((time.monotonic() - t0) * 1000)
-        stdout = raw_stdout.decode("utf-8", errors="replace") if raw_stdout else ""
-        stderr = raw_stderr.decode("utf-8", errors="replace") if raw_stderr else ""
+        stdout = _decode_output(raw_stdout)
+        stderr = _decode_output(raw_stderr)
 
         logger.info(
             "sandbox.execute",
@@ -164,12 +155,56 @@ class DockerSandbox:
             container_id=container_id,
         )
 
-        return ToolResult(
-            tool_name="sandbox",
+        return _build_tool_result(
             command=command,
+            exit_code=exit_code,
             stdout=stdout,
             stderr=stderr,
+            duration_ms=duration_ms,
+        )
+
+    async def execute_stream(
+        self,
+        command: str,
+        timeout: int = 300,
+        *,
+        output_sink: SandboxOutputSink | None = None,
+    ) -> ToolResult:
+        """Execute a command and stream decoded stdout/stderr chunks live.
+
+        The final return value preserves the buffered ``ToolResult`` contract used
+        by :meth:`execute`, while optionally forwarding incremental output to
+        ``output_sink`` for real-time rendering.
+        """
+        container_id = await self._require_running_container()
+
+        t0 = time.monotonic()
+        try:
+            exit_code, stdout, stderr = await asyncio.wait_for(
+                self._execute_stream_inner(command, output_sink=output_sink),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise SandboxTimeoutError(
+                f"Command timed out after {timeout}s: {command}",
+                container_id=container_id,
+                timeout_seconds=timeout,
+            ) from exc
+
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        logger.info(
+            "sandbox.execute_stream",
+            command=command,
             exit_code=exit_code,
+            duration_ms=duration_ms,
+            container_id=container_id,
+        )
+
+        return _build_tool_result(
+            command=command,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
             duration_ms=duration_ms,
         )
 
@@ -231,3 +266,172 @@ class DockerSandbox:
         count = await asyncio.to_thread(_cleanup)
         logger.info("sandbox.cleanup_orphans", count=count)
         return count
+
+    async def _require_running_container(self) -> str:
+        if self._container is None or self._client is None:
+            raise SandboxNotRunningError(
+                "No container available — call create() first",
+            )
+
+        container_id = self._container.short_id
+
+        def _reload_status() -> str:
+            assert self._container is not None  # noqa: S101
+            self._container.reload()
+            return self._container.status
+
+        status = await asyncio.to_thread(_reload_status)
+        if status != "running":
+            raise SandboxNotRunningError(
+                f"Container {container_id} is not running (status={status})",
+                container_id=container_id,
+            )
+
+        return container_id
+
+    async def _execute_stream_inner(
+        self,
+        command: str,
+        *,
+        output_sink: SandboxOutputSink | None,
+    ) -> tuple[int, str, str]:
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[tuple[ToolOutputStream, str] | None] = asyncio.Queue()
+        exec_task = asyncio.create_task(
+            asyncio.to_thread(self._stream_exec_worker, command, loop, queue),
+        )
+
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+
+                stream, chunk = item
+                if output_sink is None:
+                    continue
+
+                maybe_awaitable = output_sink(chunk=chunk, stream=stream)
+                if inspect.isawaitable(maybe_awaitable):
+                    await maybe_awaitable
+
+            return await exec_task
+        finally:
+            if not exec_task.done():
+                exec_task.cancel()
+
+    def _stream_exec_worker(
+        self,
+        command: str,
+        loop: asyncio.AbstractEventLoop,
+        queue: asyncio.Queue[tuple[ToolOutputStream, str] | None],
+    ) -> tuple[int, str, str]:
+        assert self._container is not None  # noqa: S101
+        assert self._client is not None  # noqa: S101
+
+        api = self._client.api
+        exec_created = api.exec_create(self._container.id, command)
+        exec_id = exec_created["Id"] if isinstance(exec_created, dict) else exec_created
+
+        stdout_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        stderr_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+
+        try:
+            for stdout_chunk, stderr_chunk in api.exec_start(exec_id, stream=True, demux=True):
+                _append_stream_chunk(
+                    loop=loop,
+                    queue=queue,
+                    stream="stdout",
+                    raw_chunk=stdout_chunk,
+                    decoder=stdout_decoder,
+                    parts=stdout_parts,
+                )
+                _append_stream_chunk(
+                    loop=loop,
+                    queue=queue,
+                    stream="stderr",
+                    raw_chunk=stderr_chunk,
+                    decoder=stderr_decoder,
+                    parts=stderr_parts,
+                )
+
+            _flush_stream_decoder(
+                loop=loop,
+                queue=queue,
+                stream="stdout",
+                decoder=stdout_decoder,
+                parts=stdout_parts,
+            )
+            _flush_stream_decoder(
+                loop=loop,
+                queue=queue,
+                stream="stderr",
+                decoder=stderr_decoder,
+                parts=stderr_parts,
+            )
+
+            inspect_result = api.exec_inspect(exec_id)
+            exit_code = int(inspect_result.get("ExitCode") or 0)
+            return exit_code, "".join(stdout_parts), "".join(stderr_parts)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+
+def _decode_output(raw_output: bytes | None) -> str:
+    return raw_output.decode("utf-8", errors="replace") if raw_output else ""
+
+
+def _build_tool_result(
+    *,
+    command: str,
+    exit_code: int,
+    stdout: str,
+    stderr: str,
+    duration_ms: int,
+) -> ToolResult:
+    return ToolResult(
+        tool_name="sandbox",
+        command=command,
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=exit_code,
+        duration_ms=duration_ms,
+    )
+
+
+def _append_stream_chunk(
+    *,
+    loop: asyncio.AbstractEventLoop,
+    queue: asyncio.Queue[tuple[ToolOutputStream, str] | None],
+    stream: ToolOutputStream,
+    raw_chunk: bytes | None,
+    decoder: codecs.IncrementalDecoder,
+    parts: list[str],
+) -> None:
+    if not raw_chunk:
+        return
+
+    decoded = decoder.decode(raw_chunk, final=False)
+    if not decoded:
+        return
+
+    parts.append(decoded)
+    loop.call_soon_threadsafe(queue.put_nowait, (stream, decoded))
+
+
+def _flush_stream_decoder(
+    *,
+    loop: asyncio.AbstractEventLoop,
+    queue: asyncio.Queue[tuple[ToolOutputStream, str] | None],
+    stream: ToolOutputStream,
+    decoder: codecs.IncrementalDecoder,
+    parts: list[str],
+) -> None:
+    decoded = decoder.decode(b"", final=True)
+    if not decoded:
+        return
+
+    parts.append(decoded)
+    loop.call_soon_threadsafe(queue.put_nowait, (stream, decoded))

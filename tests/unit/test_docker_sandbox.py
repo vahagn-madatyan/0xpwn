@@ -23,12 +23,14 @@ IMAGE = "oxpwn-sandbox:dev"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_mock_container(
     short_id: str = "abc123",
     status: str = "running",
 ) -> MagicMock:
     """Build a mock docker Container."""
     container = MagicMock()
+    container.id = f"container-{short_id}"
     container.short_id = short_id
     container.status = status
     container.start = MagicMock()
@@ -36,7 +38,7 @@ def _make_mock_container(
     container.remove = MagicMock()
     container.reload = MagicMock(side_effect=lambda: setattr(container, "status", container.status))
     container.exec_run = MagicMock(
-        return_value=(0, (b"scan output", b""))
+        return_value=(0, (b"scan output", b"warning"))
     )
     return container
 
@@ -48,6 +50,13 @@ def _make_mock_client(container: MagicMock | None = None) -> MagicMock:
         container = _make_mock_container()
     client.containers.create.return_value = container
     client.containers.list.return_value = []
+    client.api = MagicMock()
+    client.api.exec_create.return_value = {"Id": "exec-123"}
+    client.api.exec_start.return_value = iter([
+        (b"scan ", None),
+        (b"output", b"warning"),
+    ])
+    client.api.exec_inspect.return_value = {"ExitCode": 0}
     return client
 
 
@@ -135,8 +144,12 @@ class TestExecute:
         sandbox = DockerSandbox(IMAGE, SCAN_ID)
         await sandbox.create()
 
-        # Use a very small timeout that we patch into wait_for
-        with patch("oxpwn.sandbox.docker.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        async def _raise_timeout(awaitable, timeout):
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise asyncio.TimeoutError
+
+        with patch("oxpwn.sandbox.docker.asyncio.wait_for", side_effect=_raise_timeout):
             with pytest.raises(SandboxTimeoutError) as exc_info:
                 await sandbox.execute("nmap -sV target", timeout=1)
             assert exc_info.value.timeout_seconds == 1
@@ -158,6 +171,102 @@ class TestExecute:
         sandbox = DockerSandbox(IMAGE, SCAN_ID)
         with pytest.raises(SandboxNotRunningError):
             await sandbox.execute("echo hello")
+
+
+class TestExecuteStream:
+    """Streaming execution forwards live chunks and preserves final buffering."""
+
+    @patch("oxpwn.sandbox.docker.docker.from_env")
+    async def test_execute_stream_returns_buffered_tool_result_and_forwards_chunks(
+        self, mock_from_env: MagicMock
+    ) -> None:
+        container = _make_mock_container()
+        client = _make_mock_client(container)
+        mock_from_env.return_value = client
+
+        streamed_chunks: list[tuple[str, str]] = []
+
+        async def output_sink(*, chunk: str, stream: str) -> None:
+            streamed_chunks.append((stream, chunk))
+
+        sandbox = DockerSandbox(IMAGE, SCAN_ID)
+        await sandbox.create()
+        result = await sandbox.execute_stream("nmap -sV target", output_sink=output_sink)
+
+        assert isinstance(result, ToolResult)
+        assert result.stdout == "scan output"
+        assert result.stderr == "warning"
+        assert result.exit_code == 0
+        assert result.duration_ms >= 0
+        assert streamed_chunks == [
+            ("stdout", "scan "),
+            ("stdout", "output"),
+            ("stderr", "warning"),
+        ]
+        client.api.exec_create.assert_called_once_with(container.id, "nmap -sV target")
+        client.api.exec_start.assert_called_once_with("exec-123", stream=True, demux=True)
+        client.api.exec_inspect.assert_called_once_with("exec-123")
+
+    @patch("oxpwn.sandbox.docker.docker.from_env")
+    async def test_execute_stream_matches_buffered_execute_contract(
+        self, mock_from_env: MagicMock
+    ) -> None:
+        container = _make_mock_container()
+        container.exec_run.return_value = (0, (b"scan output", b"warning"))
+        client = _make_mock_client(container)
+        mock_from_env.return_value = client
+
+        sandbox = DockerSandbox(IMAGE, SCAN_ID)
+        await sandbox.create()
+
+        buffered = await sandbox.execute("nmap -sV target")
+        streamed = await sandbox.execute_stream("nmap -sV target")
+
+        assert streamed.tool_name == buffered.tool_name == "sandbox"
+        assert streamed.command == buffered.command == "nmap -sV target"
+        assert streamed.stdout == buffered.stdout == "scan output"
+        assert streamed.stderr == buffered.stderr == "warning"
+        assert streamed.exit_code == buffered.exit_code == 0
+        assert streamed.duration_ms >= 0
+        assert buffered.duration_ms >= 0
+
+    @patch("oxpwn.sandbox.docker.docker.from_env")
+    async def test_execute_stream_timeout_raises(
+        self, mock_from_env: MagicMock
+    ) -> None:
+        container = _make_mock_container()
+        mock_from_env.return_value = _make_mock_client(container)
+
+        sandbox = DockerSandbox(IMAGE, SCAN_ID)
+        await sandbox.create()
+
+        async def _raise_timeout(awaitable, timeout):
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise asyncio.TimeoutError
+
+        with patch("oxpwn.sandbox.docker.asyncio.wait_for", side_effect=_raise_timeout):
+            with pytest.raises(SandboxTimeoutError) as exc_info:
+                await sandbox.execute_stream("nmap -sV target", timeout=1)
+            assert exc_info.value.timeout_seconds == 1
+
+    @patch("oxpwn.sandbox.docker.docker.from_env")
+    async def test_execute_stream_on_stopped_container_raises(
+        self, mock_from_env: MagicMock
+    ) -> None:
+        container = _make_mock_container(status="exited")
+        mock_from_env.return_value = _make_mock_client(container)
+
+        sandbox = DockerSandbox(IMAGE, SCAN_ID)
+        await sandbox.create()
+
+        with pytest.raises(SandboxNotRunningError):
+            await sandbox.execute_stream("echo hello")
+
+    async def test_execute_stream_without_create_raises(self) -> None:
+        sandbox = DockerSandbox(IMAGE, SCAN_ID)
+        with pytest.raises(SandboxNotRunningError):
+            await sandbox.execute_stream("echo hello")
 
 
 class TestDestroy:

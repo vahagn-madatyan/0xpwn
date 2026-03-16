@@ -49,6 +49,25 @@ class FakeExecutor:
         )
 
 
+class FakeStreamingExecutor:
+    """Executor stub that opts into additive live-output streaming."""
+
+    def __init__(self, sandbox):
+        self.sandbox = sandbox
+
+    async def run(self, target: str, *, output_sink=None) -> ToolResult:
+        if output_sink is not None:
+            await output_sink(chunk="partial stdout", stream="stdout")
+            await output_sink(chunk="partial stderr", stream="stderr")
+
+        return _make_tool_result(
+            tool_name="fake-streaming",
+            command=f"fake-streaming {target}",
+            stdout="partial stdout",
+            stderr="partial stderr",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -106,6 +125,58 @@ class TestToolRegistry:
 
         sandbox = _make_sandbox()
         result = await registry.dispatch("fake", {"target": "10.0.0.1"}, sandbox)
+
+        assert isinstance(result, ToolResult)
+        assert result.tool_name == "fake"
+        assert "10.0.0.1" in result.command
+
+    @pytest.mark.asyncio
+    async def test_dispatch_forwards_output_sink_to_opt_in_executor(self):
+        registry = ToolRegistry()
+        registry.register(
+            name="fake-streaming",
+            description="Fake streaming.",
+            parameters_schema={"type": "object", "properties": {}},
+            executor_factory=lambda s: FakeStreamingExecutor(s),
+        )
+
+        streamed_chunks: list[tuple[str, str]] = []
+
+        async def output_sink(*, chunk: str, stream: str) -> None:
+            streamed_chunks.append((stream, chunk))
+
+        result = await registry.dispatch(
+            "fake-streaming",
+            {"target": "10.0.0.1"},
+            _make_sandbox(),
+            output_sink=output_sink,
+        )
+
+        assert result.tool_name == "fake-streaming"
+        assert streamed_chunks == [
+            ("stdout", "partial stdout"),
+            ("stderr", "partial stderr"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_dispatch_with_output_sink_keeps_legacy_executors_working(self):
+        registry = ToolRegistry()
+        registry.register(
+            name="fake",
+            description="Fake.",
+            parameters_schema={"type": "object", "properties": {}},
+            executor_factory=lambda s: FakeExecutor(s),
+        )
+
+        async def output_sink(*, chunk: str, stream: str) -> None:  # pragma: no cover - should never be called
+            raise AssertionError(f"Legacy executor unexpectedly streamed {stream}: {chunk}")
+
+        result = await registry.dispatch(
+            "fake",
+            {"target": "10.0.0.1"},
+            _make_sandbox(),
+            output_sink=output_sink,
+        )
 
         assert isinstance(result, ToolResult)
         assert result.tool_name == "fake"
