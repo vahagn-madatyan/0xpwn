@@ -67,7 +67,7 @@ This milestone is complete only when all are true:
 - [x] **S05: Streaming CLI + Real-time Output** `risk:medium` `depends:[S03]`
   > After this: `0xpwn scan --target <url>` CLI command exists, agent reasoning and tool output stream in real-time with Rich formatting and color-coded phase transitions — proven by running a scan from the terminal
 
-- [ ] **S06: First-Run Wizard + Config** `risk:low` `depends:[S01,S05]`
+- [x] **S06: First-Run Wizard + Config** `risk:low` `depends:[S01,S05]`
   > After this: First-time user runs `0xpwn` and gets interactive wizard that detects Ollama, guides API key setup, validates connectivity, and persists config to YAML — proven by fresh config test
 
 - [ ] **S07: CVE Enrichment + Finding Quality** `risk:medium` `depends:[S04]`

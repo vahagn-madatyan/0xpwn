@@ -214,3 +214,182 @@ def test_module_run_entrypoint_calls_typer_app(monkeypatch: pytest.MonkeyPatch) 
     main.run()
 
     assert called["value"] is True
+
+
+# ---------------------------------------------------------------------------
+# Config-backed bootstrap and config subcommands (T02)
+# ---------------------------------------------------------------------------
+
+
+def test_build_scan_config_loads_from_yaml(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """_build_scan_config() uses YAML config when model not provided via CLI/env."""
+    config_file = tmp_path / "config.yaml"
+    monkeypatch.setenv("OXPWN_CONFIG", str(config_file))
+    monkeypatch.delenv("OXPWN_MODEL", raising=False)
+    monkeypatch.delenv("OXPWN_API_KEY", raising=False)
+    monkeypatch.delenv("OXPWN_LLM_BASE_URL", raising=False)
+
+    from oxpwn.config import ConfigManager, OxpwnConfig
+
+    mgr = ConfigManager()
+    mgr.save(OxpwnConfig(model="gemini/gemini-2.5-flash", api_key="yaml-key-123"))
+
+    config = main._build_scan_config(
+        target="https://example.com",
+        model=None,
+        llm_base_url=None,
+        sandbox_image="oxpwn-sandbox:dev",
+        network_mode="bridge",
+        max_iterations_per_phase=10,
+    )
+    assert config.model == "gemini/gemini-2.5-flash"
+    assert config.api_key == "yaml-key-123"
+
+
+def test_build_scan_config_triggers_wizard_interactive(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """_build_scan_config() calls wizard when no config and terminal is interactive."""
+    config_file = tmp_path / "config.yaml"
+    monkeypatch.setenv("OXPWN_CONFIG", str(config_file))
+    monkeypatch.delenv("OXPWN_MODEL", raising=False)
+    monkeypatch.delenv("OXPWN_API_KEY", raising=False)
+
+    import sys
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(sys, "stdin", MagicMock(isatty=MagicMock(return_value=True)))
+
+    wizard_called = {"value": False}
+
+    def fake_wizard(console=None):
+        wizard_called["value"] = True
+        from oxpwn.config import OxpwnConfig, ConfigManager
+
+        cfg = OxpwnConfig(model="wizard/model", api_key="wiz-key")
+        ConfigManager().save(cfg)
+        return cfg
+
+    monkeypatch.setattr(main, "run_wizard", fake_wizard)
+
+    config = main._build_scan_config(
+        target="localhost",
+        model=None,
+        llm_base_url=None,
+        sandbox_image="oxpwn-sandbox:dev",
+        network_mode="bridge",
+        max_iterations_per_phase=10,
+    )
+    assert wizard_called["value"] is True
+    assert config.model == "wizard/model"
+    assert config.api_key == "wiz-key"
+
+
+def test_build_scan_config_raises_when_non_interactive_no_config(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """_build_scan_config() raises ScanBootstrapError in non-interactive with no config."""
+    config_file = tmp_path / "config.yaml"
+    monkeypatch.setenv("OXPWN_CONFIG", str(config_file))
+    monkeypatch.delenv("OXPWN_MODEL", raising=False)
+    monkeypatch.delenv("OXPWN_API_KEY", raising=False)
+
+    import sys
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(sys, "stdin", MagicMock(isatty=MagicMock(return_value=False)))
+
+    with pytest.raises(main.ScanBootstrapError, match="Missing model configuration"):
+        main._build_scan_config(
+            target="localhost",
+            model=None,
+            llm_base_url=None,
+            sandbox_image="oxpwn-sandbox:dev",
+            network_mode="bridge",
+            max_iterations_per_phase=10,
+        )
+
+
+def test_config_show_displays_redacted_config(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """config show displays config with redacted API key."""
+    config_file = tmp_path / "config.yaml"
+    monkeypatch.setenv("OXPWN_CONFIG", str(config_file))
+
+    from oxpwn.config import ConfigManager, OxpwnConfig
+
+    mgr = ConfigManager()
+    mgr.save(OxpwnConfig(model="openai/gpt-4o", api_key="sk-1234567890abcdef"))
+
+    result = runner.invoke(main.app, ["config", "show"])
+
+    assert result.exit_code == 0
+    assert "openai/gpt-4o" in result.output
+    assert "sk-1234567890abcdef" not in result.output
+    assert "sk-1***cdef" in result.output
+
+
+def test_config_show_no_config(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """config show works when no config file exists."""
+    config_file = tmp_path / "config.yaml"
+    monkeypatch.setenv("OXPWN_CONFIG", str(config_file))
+
+    result = runner.invoke(main.app, ["config", "show"])
+
+    assert result.exit_code == 0
+    assert "(not set)" in result.output
+
+
+def test_config_reset_deletes_config(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """config reset deletes the config file."""
+    config_file = tmp_path / "config.yaml"
+    monkeypatch.setenv("OXPWN_CONFIG", str(config_file))
+
+    from oxpwn.config import ConfigManager, OxpwnConfig
+
+    mgr = ConfigManager()
+    mgr.save(OxpwnConfig(model="test"))
+    assert mgr.exists()
+
+    # CliRunner is non-interactive, so confirmation is skipped
+    result = runner.invoke(main.app, ["config", "reset"])
+
+    assert result.exit_code == 0
+    assert not mgr.exists()
+
+
+def test_config_reset_no_config(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """config reset with no config file is a no-op."""
+    config_file = tmp_path / "config.yaml"
+    monkeypatch.setenv("OXPWN_CONFIG", str(config_file))
+
+    result = runner.invoke(main.app, ["config", "reset"])
+
+    assert result.exit_code == 0
+    assert "Nothing to reset" in result.output
+
+
+def test_config_wizard_subcommand(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """config wizard invokes the wizard flow."""
+    config_file = tmp_path / "config.yaml"
+    monkeypatch.setenv("OXPWN_CONFIG", str(config_file))
+
+    wizard_called = {"value": False}
+
+    def fake_wizard(console=None):
+        wizard_called["value"] = True
+        from oxpwn.config import OxpwnConfig
+
+        return OxpwnConfig(model="wizard/test-model")
+
+    monkeypatch.setattr(main, "run_wizard", fake_wizard)
+
+    result = runner.invoke(main.app, ["config", "wizard"])
+
+    assert wizard_called["value"] is True
+    assert result.exit_code == 0
+
+
+def test_config_help_shows_subcommands() -> None:
+    """0xpwn config --help lists show, reset, wizard subcommands."""
+    result = runner.invoke(main.app, ["config", "--help"])
+
+    assert result.exit_code == 0
+    assert "show" in result.output
+    assert "reset" in result.output
+    assert "wizard" in result.output

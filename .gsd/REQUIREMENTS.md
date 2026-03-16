@@ -39,13 +39,13 @@ This file is the explicit capability and coverage contract for 0xpwn.
 
 ### R005 — First-run guided model setup wizard
 - Class: launchability
-- Status: active
+- Status: validated
 - Description: Interactive wizard on first run detects available models, guides API key setup or Ollama configuration, persists to YAML config
 - Why it matters: Zero-friction onboarding — user should go from `pip install` to first scan in under 2 minutes
 - Source: user
 - Primary owning slice: M001/S06
 - Supporting slices: none
-- Validation: unmapped
+- Validation: Validated by 56 unit tests (`test_config_manager.py` 27 + `test_wizard.py` 15 + `test_cli_main.py` 14) proving config model, YAML persistence, XDG paths, env-override precedence, wizard flows (cloud/local/Ollama), non-interactive skip, LLM validation, config subcommands (show/reset/wizard), and config-backed scan bootstrap. Human UAT pending for interactive UX quality.
 - Notes: Adaptive flow: "Have an API key? → configure. No? → set up Ollama."
 
 ### R006 — CVE/NVD enrichment for findings
@@ -425,7 +425,7 @@ This file is the explicit capability and coverage contract for 0xpwn.
 | R002 | core-capability | validated | M001/S02 | M001/S08 | `test_nmap_executor_real_scan` + `test_tool_suite_integration.py` real Docker verification |
 | R003 | core-capability | active | M001/S01 | M001/S06 | unmapped |
 | R004 | primary-user-loop | active | M001/S05 | M001/S08 | S05: 64 unit tests + 2 integration tests + terminal smoke run prove streaming CLI renders reasoning, tool output, and phase transitions incrementally; full five-phase validation deferred to S08 |
-| R005 | launchability | active | M001/S06 | none | unmapped |
+| R005 | launchability | validated | M001/S06 | none | 56 unit tests (config model, wizard flows, CLI integration, config subcommands) |
 | R006 | differentiator | active | M001/S07 | none | unmapped |
 | R007 | compliance/security | active | M002/S01 | none | unmapped |
 | R008 | differentiator | active | M002/S02 | none | unmapped |
@@ -461,7 +461,7 @@ This file is the explicit capability and coverage contract for 0xpwn.
 
 ## Coverage Summary
 
-- Active requirements: 23
+- Active requirements: 22
 - Mapped to slices: 24
-- Validated: 1
+- Validated: 2
 - Unmapped active requirements: 0

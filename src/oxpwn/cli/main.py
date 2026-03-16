@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -12,12 +13,16 @@ from typing import Any, Callable, Optional
 import structlog
 import typer
 from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Confirm
 
 from oxpwn import __version__
 from oxpwn.agent.exceptions import AgentError
 from oxpwn.agent.react import ReactAgent
 from oxpwn.agent.tools import ToolRegistry, register_default_tools
 from oxpwn.cli.streaming import RichStreamingCallback, redact_string, render_error_panel
+from oxpwn.cli.wizard import run_wizard
+from oxpwn.config import ConfigManager, OxpwnConfig, resolve_config
 from oxpwn.core.models import ScanState
 from oxpwn.llm.client import LLMClient
 from oxpwn.llm.exceptions import LLMAuthError, LLMError, LLMRateLimitError, LLMToolCallError
@@ -35,6 +40,13 @@ app = typer.Typer(
     help="AI-powered penetration testing engine.",
     no_args_is_help=True,
 )
+
+config_app = typer.Typer(
+    name="config",
+    help="Manage 0xpwn configuration.",
+    no_args_is_help=True,
+)
+app.add_typer(config_app)
 
 
 @dataclass(frozen=True)
@@ -324,14 +336,44 @@ def _build_scan_config(
     network_mode: str,
     max_iterations_per_phase: int,
 ) -> ScanRuntimeConfig:
-    """Resolve CLI inputs and env-backed defaults into a runtime config."""
+    """Resolve CLI inputs, env vars, YAML config, and wizard into a runtime config."""
     normalized_target = target.strip()
     if not normalized_target:
         raise ScanBootstrapError("Target cannot be empty.")
 
-    resolved_model = (model or "").strip()
+    # Load YAML config as fallback
+    mgr = ConfigManager()
+    yaml_config = mgr.load()
+    logger.debug("config.loaded", has_model=yaml_config.model is not None)
+
+    # Resolve with precedence: CLI > env > YAML
+    resolved = resolve_config(
+        cli_model=model,
+        cli_api_key=None,  # API key comes from env or YAML
+        cli_base_url=llm_base_url,
+        yaml_config=yaml_config,
+    )
+
+    resolved_model = (resolved["model"] or "").strip()
+
+    # If still no model, try the wizard
     if not resolved_model:
-        raise ScanBootstrapError("Missing model configuration. Pass --model or set OXPWN_MODEL.")
+        if sys.stdin.isatty():
+            console = Console()
+            wizard_config = run_wizard(console)
+            if wizard_config and wizard_config.model:
+                resolved_model = wizard_config.model
+                # Also pick up api_key/base_url from wizard if not already set
+                if not resolved["api_key"] and wizard_config.api_key:
+                    resolved["api_key"] = wizard_config.api_key
+                if not resolved["base_url"] and wizard_config.base_url:
+                    resolved["base_url"] = wizard_config.base_url
+
+    if not resolved_model:
+        raise ScanBootstrapError(
+            "Missing model configuration. "
+            "Pass --model, set OXPWN_MODEL, or run: 0xpwn config wizard"
+        )
 
     return ScanRuntimeConfig(
         target=normalized_target,
@@ -339,8 +381,8 @@ def _build_scan_config(
         sandbox_image=sandbox_image,
         network_mode=network_mode,
         max_iterations_per_phase=max_iterations_per_phase,
-        api_key=os.environ.get("OXPWN_API_KEY"),
-        base_url=llm_base_url,
+        api_key=resolved["api_key"] or os.environ.get("OXPWN_API_KEY"),
+        base_url=resolved["base_url"],
     )
 
 
@@ -348,6 +390,77 @@ def _build_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
     register_default_tools(registry)
     return registry
+
+
+# ---------------------------------------------------------------------------
+# config subcommands
+# ---------------------------------------------------------------------------
+
+
+def _redact_display_key(key: str | None) -> str:
+    """Redact API key for display in config show."""
+    if not key:
+        return "(not set)"
+    if len(key) <= 10:
+        return "***"
+    return f"{key[:4]}***{key[-4:]}"
+
+
+@config_app.command("show")
+def config_show() -> None:
+    """Display the current 0xpwn configuration."""
+    console = Console()
+    mgr = ConfigManager()
+    config = mgr.load()
+    path = mgr.get_config_path()
+
+    lines = [
+        f"Config file: {path}",
+        f"File exists: {mgr.exists()}",
+        "",
+        f"model: {config.model or '(not set)'}",
+        f"api_key: {_redact_display_key(config.api_key)}",
+        f"base_url: {config.base_url or '(not set)'}",
+        f"schema_version: {config.schema_version}",
+    ]
+
+    console.print(
+        Panel("\n".join(lines), title="0xpwn configuration", border_style="blue")
+    )
+
+
+@config_app.command("reset")
+def config_reset() -> None:
+    """Delete the 0xpwn configuration file."""
+    console = Console()
+    mgr = ConfigManager()
+
+    if not mgr.exists():
+        console.print("[dim]No configuration file found. Nothing to reset.[/dim]")
+        return
+
+    path = mgr.get_config_path()
+    if sys.stdin.isatty():
+        confirmed = Confirm.ask(
+            f"Delete configuration at {path}?",
+            default=False,
+            console=console,
+        )
+        if not confirmed:
+            console.print("[dim]Reset cancelled.[/dim]")
+            return
+
+    mgr.delete()
+    console.print(f"[green]✓[/green] Configuration deleted: {path}")
+
+
+@config_app.command("wizard")
+def config_wizard() -> None:
+    """Run the interactive setup wizard."""
+    console = Console()
+    result = run_wizard(console)
+    if result is None:
+        raise typer.Exit(code=1)
 
 
 def _log_scan_failure(*, event: str, config: ScanRuntimeConfig, exc: Exception) -> None:
