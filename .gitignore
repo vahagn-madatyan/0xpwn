@@ -1,4 +1,7 @@
 
+# Reference / design docs (local only)
+reference/
+
 # ── GSD baseline (auto-generated) ──
 .gsd/activity/
 .gsd/runtime/
@@ -34,3 +37,10 @@ tmp/
 
 # ── GSD baseline (auto-generated) ──
 .gsd/completed-units.json
+
+# ── GSD baseline (auto-generated) ──
+.gsd/forensics/
+.gsd/gsd.db
+.gsd/DISCUSSION-MANIFEST.json
+.gsd/milestones/**/*-CONTINUE.md
+.gsd/milestones/**/continue.md
