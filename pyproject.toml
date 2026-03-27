@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "0xpwn"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI-powered penetration testing engine"
 license = "Apache-2.0"
 requires-python = ">=3.11"
@@ -26,7 +26,7 @@ classifiers = [
 
 dependencies = [
     "pydantic>=2.0",
-    "litellm>=1.0,!=1.82.7,!=1.82.8",
+    "litellm==1.82.6"  # Pinned: 1.82.7/1.82.8 compromised, package quarantined on PyPI,
     "typer>=0.9",
     "rich>=13.0",
     "structlog>=23.0",
